@@ -17,10 +17,10 @@ services:
     runtime: docker
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: ./apps/api
-    plan: starter          # 無料枠 → 本番は standard に変更
-    region: oregon         # singapore も可
+    plan: free
+    region: oregon
     healthCheckPath: /health
-    autoDeploy: true       # main ブランチへのプッシュで自動デプロイ
+    autoDeploy: true
 
     envVars:
       # App
@@ -92,7 +92,7 @@ services:
     runtime: docker
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: ./apps/api
-    plan: starter
+    plan: free
     region: oregon
     autoDeploy: true
     # Celeryワーカーとして起動（CMDを上書き）
@@ -155,7 +155,7 @@ services:
     runtime: docker
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: ./apps/api
-    plan: starter
+    plan: free
     region: oregon
     autoDeploy: true
     dockerCommand: >
@@ -186,7 +186,7 @@ services:
     runtime: docker
     dockerfilePath: ./apps/web/Dockerfile
     dockerContext: ./apps/web
-    plan: starter
+    plan: free
     region: oregon
     autoDeploy: true
 
