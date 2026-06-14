@@ -1,0 +1,123 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: vtuber_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vtuber}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vtuber_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-vtuber_studio}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vtuber}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: vtuber_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: vtuber_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/app
+      - uploads_data:/app/static/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery_worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: vtuber_celery_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./apps/api:/app
+      - uploads_data:/app/static/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.jobs.celery_app worker --loglevel=info --concurrency=2
+
+  celery_beat:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: vtuber_celery_beat
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./apps/api:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.jobs.celery_app beat --loglevel=info
+
+  flower:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: vtuber_flower
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    command: celery -A app.jobs.celery_app flower --port=5555
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: vtuber_web
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
