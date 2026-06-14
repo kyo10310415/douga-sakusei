@@ -131,6 +131,7 @@ class GeneratedAsset(Base, UUIDMixin, TimestampMixin):
     error_message = Column(Text, nullable=True)
 
     section = relationship("ScriptSection", back_populates="assets")
+    render_job = relationship("RenderJob", back_populates="assets", foreign_keys=[render_job_id])
 
 
 class RenderJob(Base, UUIDMixin, TimestampMixin):
