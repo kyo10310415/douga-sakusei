@@ -1,12 +1,14 @@
 # render.yaml - VTuber Studio 本番インフラ定義
 # Render Blueprint (IaC) https://render.com/docs/blueprint-spec
 #
-# 含まれるサービス:
-#   - api        : FastAPI Web Service (Dockerfile)
-#   - worker     : Celery Background Worker (Dockerfile)
-#   - web        : Next.js 14 Web Service (Dockerfile)
-#   - db         : PostgreSQL 16 Managed Database
-#   - redis      : Redis Managed Instance
+# 含まれるサービス（無料プラン構成）:
+#   - api  : FastAPI Web Service（Celery Worker/Beat も同梱起動）
+#   - web  : Next.js Web Service
+#   - db   : PostgreSQL 16 Managed Database
+#   - redis: Redis Managed Instance
+#
+# ※ Renderの無料プランはBackground Workerが使えないため
+#    Celery Worker と Beat は api サービスの start.sh 内で起動します
 
 services:
   # ===========================================================
@@ -85,101 +87,7 @@ services:
         value: /tmp/uploads
 
   # ===========================================================
-  # 2. Celery バックグラウンドワーカー
-  # ===========================================================
-  - type: worker
-    name: vtuber-studio-worker
-    runtime: docker
-    dockerfilePath: ./apps/api/Dockerfile
-    dockerContext: ./apps/api
-    plan: free
-    region: oregon
-    autoDeploy: true
-    # Celeryワーカーとして起動（CMDを上書き）
-    dockerCommand: >
-      celery -A app.jobs.celery_app worker
-      --loglevel=info
-      --concurrency=2
-      -Q youtube,ai,video,upload,default
-
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: DEBUG
-        value: "false"
-      - key: SECRET_KEY
-        fromService:
-          name: vtuber-studio-api
-          type: web
-          envVarKey: SECRET_KEY
-
-      - key: DATABASE_URL
-        fromDatabase:
-          name: vtuber-studio-db
-          property: connectionString
-
-      - key: REDIS_URL
-        fromService:
-          name: vtuber-studio-redis
-          type: redis
-          property: connectionString
-
-      - key: YOUTUBE_CLIENT_ID
-        sync: false
-      - key: YOUTUBE_CLIENT_SECRET
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: TTS_PROVIDER
-        value: mock
-      - key: TTS_API_KEY
-        sync: false
-      - key: IMAGE_GENERATION_PROVIDER
-        value: mock
-      - key: IMAGE_GENERATION_API_KEY
-        sync: false
-      - key: VIDEO_GENERATION_PROVIDER
-        value: mock
-      - key: VIDEO_GENERATION_API_KEY
-        sync: false
-      - key: STORAGE_PROVIDER
-        value: local
-      - key: UPLOAD_DIR
-        value: /tmp/uploads
-
-  # ===========================================================
-  # 3. Celery Beat スケジューラ（週次分析Cron）
-  # ===========================================================
-  - type: worker
-    name: vtuber-studio-beat
-    runtime: docker
-    dockerfilePath: ./apps/api/Dockerfile
-    dockerContext: ./apps/api
-    plan: free
-    region: oregon
-    autoDeploy: true
-    dockerCommand: >
-      celery -A app.jobs.celery_app beat
-      --loglevel=info
-      --scheduler celery.beat:PersistentScheduler
-
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: vtuber-studio-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: vtuber-studio-redis
-          type: redis
-          property: connectionString
-      - key: OPENAI_API_KEY
-        sync: false
-
-  # ===========================================================
-  # 4. Next.js フロントエンド
+  # 2. Next.js フロントエンド
   # ===========================================================
   - type: web
     name: vtuber-studio-web
@@ -199,7 +107,7 @@ services:
         value: production
 
   # ===========================================================
-  # 5. Redis（Celery ブローカー + 結果バックエンド）
+  # 3. Redis（Celery ブローカー + 結果バックエンド）
   # ===========================================================
   - type: redis
     name: vtuber-studio-redis
@@ -209,7 +117,7 @@ services:
     ipAllowList: []            # Render内部からのみ許可
 
 # ===========================================================
-# 6. PostgreSQL データベース
+# 4. PostgreSQL データベース
 # ===========================================================
 databases:
   - name: vtuber-studio-db
