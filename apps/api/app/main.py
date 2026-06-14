@@ -23,9 +23,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ======================================================
+# 認証不要エンドポイント（ルーター登録より必ず前に定義）
+# ======================================================
+@app.get("/health", tags=["system"])
+def health_check():
+    return {"status": "ok", "service": "VTuber Studio API"}
+
+
 # 静的ファイルサービス
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-os.makedirs("static", exist_ok=True)  # static/ ディレクトリがなくても起動できるよう作成
+os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # APIルーターを登録
@@ -52,13 +60,7 @@ app.include_router(settings_router, prefix=API_PREFIX)
 app.include_router(dashboard_router, prefix=API_PREFIX)
 
 
-@app.get("/health")
-def health_check():
-    return {"status": "ok", "service": "VTuber Studio API"}
-
-
 @app.on_event("startup")
 async def startup_event():
     """起動時の初期化処理"""
-    # DBテーブルの存在確認（マイグレーション済み前提）
     pass
