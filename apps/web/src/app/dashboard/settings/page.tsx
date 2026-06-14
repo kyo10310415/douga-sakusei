@@ -1,5 +1,6 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { settingsApi, youtubeApi } from '@/lib/api'
 
 const DAY_OPTIONS = [
@@ -12,32 +13,76 @@ const DAY_OPTIONS = [
   { value: 6, label: '土曜日' },
 ]
 
+type YouTubeAccount = {
+  id: string
+  channel_id: string
+  channel_title: string
+  channel_thumbnail_url: string | null
+  subscriber_count: number | null
+  video_count: number | null
+  view_count: number | null
+  last_synced_at: string | null
+  has_refresh_token: boolean
+}
+
 export default function SettingsPage() {
-  const [scheduler, setScheduler] = useState({
-    day_of_week: 1,
-    hour: 9,
-    minute: 0,
-    enabled: true,
-  })
+  const searchParams = useSearchParams()
+  const [scheduler, setScheduler] = useState({ day_of_week: 1, hour: 9, minute: 0, enabled: true })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [oauthUrl, setOauthUrl] = useState('')
   const [connectingYouTube, setConnectingYouTube] = useState(false)
+  const [disconnecting, setDisconnecting] = useState<string | null>(null)
+  const [accounts, setAccounts] = useState<YouTubeAccount[]>([])
+  const [accountsLoading, setAccountsLoading] = useState(true)
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+
+  const showToast = (type: 'success' | 'error', msg: string) => {
+    setToast({ type, msg })
+    setTimeout(() => setToast(null), 5000)
+  }
+
+  const fetchAccounts = useCallback(async () => {
+    setAccountsLoading(true)
+    try {
+      const res = await youtubeApi.getAccounts()
+      setAccounts(res.data)
+    } catch {
+      // 未設定の場合は空配列のまま
+    } finally {
+      setAccountsLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     settingsApi.getScheduler()
       .then(res => setScheduler(res.data))
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [])
+    fetchAccounts()
+  }, [fetchAccounts])
+
+  // コールバック結果をURLパラメータから受け取る
+  useEffect(() => {
+    const youtube = searchParams.get('youtube')
+    if (youtube === 'success') {
+      showToast('success', 'YouTubeアカウントの連携が完了しました！')
+      fetchAccounts()
+      // URLをクリーンアップ
+      window.history.replaceState({}, '', '/dashboard/settings')
+    } else if (youtube === 'error') {
+      const reason = searchParams.get('reason') || '不明なエラー'
+      showToast('error', `YouTube連携に失敗しました: ${reason}`)
+      window.history.replaceState({}, '', '/dashboard/settings')
+    }
+  }, [searchParams, fetchAccounts])
 
   const handleSaveScheduler = async () => {
     setSaving(true)
     try {
       await settingsApi.updateScheduler(scheduler)
-      alert('スケジューラー設定を保存しました')
+      showToast('success', 'スケジューラー設定を保存しました')
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'エラーが発生しました')
+      showToast('error', err.response?.data?.detail || 'エラーが発生しました')
     } finally {
       setSaving(false)
     }
@@ -47,12 +92,32 @@ export default function SettingsPage() {
     setConnectingYouTube(true)
     try {
       const res = await youtubeApi.startOAuth()
-      window.open(res.data.authorization_url, '_blank')
+      // 同じタブでリダイレクト（OAuth callbackがダッシュボードに戻る）
+      window.location.href = res.data.authorization_url
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'YouTube連携エラー: OAuth設定を確認してください')
-    } finally {
+      showToast('error', err.response?.data?.detail || 'YouTube連携エラー: サーバーのOAuth設定を確認してください')
       setConnectingYouTube(false)
     }
+  }
+
+  const handleDisconnect = async (accountId: string, channelTitle: string) => {
+    if (!confirm(`「${channelTitle}」との連携を切断しますか？`)) return
+    setDisconnecting(accountId)
+    try {
+      await youtubeApi.disconnectAccount(accountId)
+      showToast('success', `「${channelTitle}」の連携を切断しました`)
+      fetchAccounts()
+    } catch (err: any) {
+      showToast('error', err.response?.data?.detail || '切断に失敗しました')
+    } finally {
+      setDisconnecting(null)
+    }
+  }
+
+  const formatCount = (n: number | null) => {
+    if (n == null) return '—'
+    if (n >= 10000) return `${(n / 10000).toFixed(1)}万`
+    return n.toLocaleString()
   }
 
   if (loading) return <div className="p-8 text-gray-400">読み込み中...</div>
@@ -61,34 +126,106 @@ export default function SettingsPage() {
     <div className="p-8 max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">⚙️ システム設定</h1>
 
-      {/* YouTube連携 */}
+      {/* トースト通知 */}
+      {toast && (
+        <div className={`fixed top-6 right-6 z-50 px-5 py-3 rounded-xl shadow-lg text-white text-sm font-medium transition-all
+          ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}>
+          {toast.type === 'success' ? '✅ ' : '❌ '}{toast.msg}
+        </div>
+      )}
+
+      {/* YouTube連携セクション */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 mb-6">
-        <h2 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+        <h2 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-lg">
           <span>📺</span> YouTube連携
         </h2>
-        <p className="text-sm text-gray-500 mb-4">
-          YouTubeチャンネルとの連携設定です。.envファイルにYOUTUBE_CLIENT_IDとYOUTUBE_CLIENT_SECRETを設定してください。
-        </p>
-        <div className="bg-gray-50 rounded-lg p-4 mb-4">
-          <p className="text-xs font-medium text-gray-600 mb-2">必要な.env設定:</p>
-          <code className="text-xs text-gray-500 block">
-            YOUTUBE_CLIENT_ID=your-client-id<br />
-            YOUTUBE_CLIENT_SECRET=your-client-secret<br />
-            YOUTUBE_REDIRECT_URI=http://localhost:8000/api/youtube/oauth/callback
-          </code>
-        </div>
+
+        {/* 連携済みアカウント一覧 */}
+        {accountsLoading ? (
+          <div className="text-sm text-gray-400 py-4 text-center">アカウント確認中...</div>
+        ) : accounts.length > 0 ? (
+          <div className="space-y-3 mb-5">
+            {accounts.map(account => (
+              <div key={account.id}
+                className="flex items-center gap-4 bg-green-50 border border-green-200 rounded-xl p-4">
+                {account.channel_thumbnail_url ? (
+                  <img
+                    src={account.channel_thumbnail_url}
+                    alt={account.channel_title}
+                    className="w-12 h-12 rounded-full border-2 border-green-300"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-green-200 flex items-center justify-center text-green-700 font-bold text-lg">
+                    {account.channel_title?.[0] ?? 'Y'}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-800 truncate">{account.channel_title}</p>
+                  <div className="flex gap-3 mt-1 text-xs text-gray-500">
+                    <span>👥 {formatCount(account.subscriber_count)}</span>
+                    <span>🎬 {formatCount(account.video_count)}本</span>
+                    <span>👁 {formatCount(account.view_count)}</span>
+                  </div>
+                  {account.last_synced_at && (
+                    <p className="text-xs text-gray-400 mt-1">
+                      最終同期: {new Date(account.last_synced_at).toLocaleString('ja-JP')}
+                    </p>
+                  )}
+                  {!account.has_refresh_token && (
+                    <p className="text-xs text-amber-600 mt-1">⚠️ リフレッシュトークンなし（再連携を推奨）</p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium text-center">
+                    ✓ 連携中
+                  </span>
+                  <button
+                    onClick={() => handleDisconnect(account.id, account.channel_title)}
+                    disabled={disconnecting === account.id}
+                    className="text-xs text-red-500 hover:text-red-700 disabled:opacity-50 underline"
+                  >
+                    {disconnecting === account.id ? '切断中...' : '切断'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-gray-50 rounded-xl p-5 mb-5 text-center">
+            <p className="text-gray-500 text-sm mb-1">YouTubeアカウントが連携されていません</p>
+            <p className="text-gray-400 text-xs">連携するとチャンネルデータの取得・動画アップロードが可能になります</p>
+          </div>
+        )}
+
+        {/* 連携ボタン */}
         <button
           onClick={handleConnectYouTube}
           disabled={connectingYouTube}
-          className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium"
+          className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-wait text-white px-5 py-3 rounded-xl text-sm font-semibold transition-colors"
         >
-          {connectingYouTube ? '接続中...' : '🔗 YouTube連携を開始'}
+          {connectingYouTube ? (
+            <>
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+              </svg>
+              Googleアカウント選択画面へ移動中...
+            </>
+          ) : accounts.length > 0 ? (
+            '🔗 別のYouTubeアカウントを追加連携'
+          ) : (
+            '🔗 YouTubeアカウントを連携する'
+          )}
         </button>
+
+        <p className="text-xs text-gray-400 mt-3">
+          ※ RenderダッシュボードでYOUTUBE_CLIENT_IDとYOUTUBE_CLIENT_SECRETの設定が必要です
+        </p>
       </div>
 
       {/* スケジューラー設定 */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 mb-6">
-        <h2 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+        <h2 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-lg">
           <span>⏰</span> 週次ジョブスケジューラー
         </h2>
         <p className="text-sm text-gray-500 mb-4">
@@ -123,7 +260,6 @@ export default function SettingsPage() {
                 ))}
               </select>
             </div>
-
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">時 (0-23)</label>
               <input
@@ -134,7 +270,6 @@ export default function SettingsPage() {
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
               />
             </div>
-
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">分 (0-59)</label>
               <input
@@ -163,9 +298,9 @@ export default function SettingsPage() {
         </button>
       </div>
 
-      {/* ジョブフロー説明 */}
+      {/* 自動化フロー説明 */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-        <h2 className="font-bold text-gray-800 mb-4">🔄 自動化フロー</h2>
+        <h2 className="font-bold text-gray-800 mb-4 text-lg">🔄 自動化フロー</h2>
         <div className="space-y-2">
           {[
             { step: 1, label: 'YouTube週次データ取得', desc: 'Analytics APIで視聴データを取得' },
@@ -176,7 +311,7 @@ export default function SettingsPage() {
             { step: 6, label: '素材生成', desc: '背景・挿入画像などの素材を生成' },
             { step: 7, label: '動画レンダリング', desc: 'FFmpegでシーンを合成・動画化' },
             { step: 8, label: 'YouTube限定公開アップロード', desc: '必ずunlistedでアップロード（auto-publicは禁止）' },
-            { step: 9, label: '人間によるレビュー待ち', desc: 'ダッシュボードで通知' },
+            { step: 9, label: '人間によるレビュー待ち', desc: 'ダッシュボードで通知・承認後に公開' },
           ].map(item => (
             <div key={item.step} className="flex items-start gap-3">
               <span className="w-6 h-6 bg-purple-100 text-purple-700 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0">

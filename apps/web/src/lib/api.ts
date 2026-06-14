@@ -52,6 +52,8 @@ export const dashboardApi = {
 // YouTube API
 export const youtubeApi = {
   startOAuth: () => apiClient.post('/youtube/oauth/start'),
+  getAccounts: () => apiClient.get('/youtube/accounts'),
+  disconnectAccount: (accountId: string) => apiClient.delete(`/youtube/accounts/${accountId}`),
   syncWeekly: (accountId?: string) =>
     apiClient.post('/youtube/sync-weekly', null, { params: { youtube_account_id: accountId } }),
   getWeeklyMetrics: (limit = 12) =>

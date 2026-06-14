@@ -12,8 +12,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Python venv lib dirs (ルート直下のみ・src/lib等は除外しない)
+/lib/
+/lib64/
 parts/
 sdist/
 var/

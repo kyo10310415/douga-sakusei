@@ -18,8 +18,8 @@ class YouTubeService:
         "https://www.googleapis.com/auth/yt-analytics.readonly",
     ]
 
-    def get_authorization_url(self) -> str:
-        """OAuth2認証URLを生成"""
+    def get_authorization_url(self, state: Optional[str] = None) -> str:
+        """OAuth2認証URLを生成。stateにuser_idトークンを埋め込む"""
         from google_auth_oauthlib.flow import Flow
 
         flow = Flow.from_client_config(
@@ -35,11 +35,14 @@ class YouTubeService:
             scopes=self.SCOPES,
         )
         flow.redirect_uri = settings.YOUTUBE_REDIRECT_URI
-        authorization_url, state = flow.authorization_url(
-            access_type="offline",
-            include_granted_scopes="true",
-            prompt="consent",
-        )
+        kwargs = {
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": "consent",
+        }
+        if state:
+            kwargs["state"] = state
+        authorization_url, _ = flow.authorization_url(**kwargs)
         return authorization_url
 
     def exchange_code_for_tokens(self, code: str) -> Dict[str, Any]:

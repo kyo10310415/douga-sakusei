@@ -4,37 +4,70 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from pydantic import BaseModel
+import jwt as pyjwt
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.security import encrypt_token, decrypt_token
+from app.core.config import settings
 from app.models.user import User
 from app.models.youtube import YouTubeAccount, WeeklyMetrics, VideoMetrics
 from app.services.youtube_service import youtube_service
 
 router = APIRouter(prefix="/youtube", tags=["YouTube"])
 
+# ─────────────────────────────────────────
+#  OAuth
+# ─────────────────────────────────────────
 
 @router.post("/oauth/start")
 def start_oauth(current_user: User = Depends(get_current_user)):
-    """YouTube OAuth認証を開始"""
-    from app.core.config import settings
+    """YouTube OAuth認証を開始。stateにuser_idを埋め込む"""
     if not settings.YOUTUBE_CLIENT_ID:
-        raise HTTPException(status_code=400, detail="YouTube OAuth設定がありません")
-    url = youtube_service.get_authorization_url()
+        raise HTTPException(status_code=400, detail="YouTube OAuth設定がありません（YOUTUBE_CLIENT_IDを設定してください）")
+
+    # stateトークンにuser_idを埋め込む（署名付き・10分有効）
+    state_payload = {"user_id": str(current_user.id), "exp": int(datetime.utcnow().timestamp()) + 600}
+    state_token = pyjwt.encode(state_payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+    url = youtube_service.get_authorization_url(state=state_token)
     return {"authorization_url": url}
 
 
 @router.get("/oauth/callback")
 def oauth_callback(
-    code: str,
+    code: Optional[str] = None,
     state: Optional[str] = None,
     error: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """YouTube OAuth コールバック"""
+    """YouTube OAuthコールバック。stateからuser_idを復元してトークンを保存する"""
+    web_url = settings.ALLOWED_ORIGINS.split(",")[0].strip()
+
+    # エラーケース
     if error:
-        raise HTTPException(status_code=400, detail=f"OAuth認証エラー: {error}")
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason={error}")
+
+    if not code:
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=no_code")
+
+    # stateを検証してユーザーを特定
+    user_id: Optional[str] = None
+    if state:
+        try:
+            payload = pyjwt.decode(state, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            user_id = payload.get("user_id")
+        except pyjwt.ExpiredSignatureError:
+            return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=state_expired")
+        except Exception:
+            return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=invalid_state")
+
+    if not user_id:
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=missing_user")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=user_not_found")
 
     try:
         tokens = youtube_service.exchange_code_for_tokens(code)
@@ -42,43 +75,103 @@ def oauth_callback(
             tokens["access_token"], tokens.get("refresh_token", "")
         )
 
-        # 既存チェック
+        # 既存チェック（同チャンネルIDがあれば更新）
         existing = db.query(YouTubeAccount).filter(
             YouTubeAccount.channel_id == channel_info["channel_id"]
         ).first()
 
         if existing:
+            existing.user_id = user.id
             existing.access_token_encrypted = encrypt_token(tokens["access_token"])
             if tokens.get("refresh_token"):
                 existing.refresh_token_encrypted = encrypt_token(tokens["refresh_token"])
+            existing.channel_title = channel_info.get("title")
+            existing.channel_thumbnail_url = channel_info.get("thumbnail_url")
+            existing.subscriber_count = channel_info.get("subscriber_count")
+            existing.video_count = channel_info.get("video_count")
+            existing.view_count = channel_info.get("view_count")
             existing.last_synced_at = datetime.utcnow()
+            existing.is_active = True
             db.commit()
-            return {"message": "YouTube連携を更新しました", "channel_id": channel_info["channel_id"]}
+        else:
+            account = YouTubeAccount(
+                user_id=user.id,
+                channel_id=channel_info["channel_id"],
+                channel_title=channel_info.get("title"),
+                channel_description=channel_info.get("description"),
+                channel_thumbnail_url=channel_info.get("thumbnail_url"),
+                subscriber_count=channel_info.get("subscriber_count"),
+                video_count=channel_info.get("video_count"),
+                view_count=channel_info.get("view_count"),
+                access_token_encrypted=encrypt_token(tokens["access_token"]),
+                refresh_token_encrypted=encrypt_token(tokens["refresh_token"]) if tokens.get("refresh_token") else None,
+                oauth_scopes=tokens.get("scopes", []),
+            )
+            db.add(account)
+            db.commit()
 
-        # 最初のユーザーに紐付け（本番では認証済みユーザーに紐付け）
-        from app.models.user import User
-        first_user = db.query(User).first()
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=success")
 
-        account = YouTubeAccount(
-            user_id=first_user.id if first_user else None,
-            channel_id=channel_info["channel_id"],
-            channel_title=channel_info.get("title"),
-            channel_description=channel_info.get("description"),
-            channel_thumbnail_url=channel_info.get("thumbnail_url"),
-            subscriber_count=channel_info.get("subscriber_count"),
-            video_count=channel_info.get("video_count"),
-            view_count=channel_info.get("view_count"),
-            access_token_encrypted=encrypt_token(tokens["access_token"]),
-            refresh_token_encrypted=encrypt_token(tokens["refresh_token"]) if tokens.get("refresh_token") else None,
-            oauth_scopes=tokens.get("scopes", []),
-        )
-        db.add(account)
-        db.commit()
-
-        return {"message": "YouTube連携が完了しました", "channel_id": channel_info["channel_id"]}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason={str(e)[:100]}")
 
+
+# ─────────────────────────────────────────
+#  アカウント管理
+# ─────────────────────────────────────────
+
+@router.get("/accounts")
+def get_youtube_accounts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """ログインユーザーの連携済みYouTubeアカウント一覧"""
+    accounts = db.query(YouTubeAccount).filter(
+        YouTubeAccount.user_id == current_user.id,
+        YouTubeAccount.is_active == True,
+    ).all()
+
+    return [
+        {
+            "id": str(a.id),
+            "channel_id": a.channel_id,
+            "channel_title": a.channel_title,
+            "channel_thumbnail_url": a.channel_thumbnail_url,
+            "subscriber_count": a.subscriber_count,
+            "video_count": a.video_count,
+            "view_count": a.view_count,
+            "last_synced_at": a.last_synced_at.isoformat() if a.last_synced_at else None,
+            "has_refresh_token": bool(a.refresh_token_encrypted),
+        }
+        for a in accounts
+    ]
+
+
+@router.delete("/accounts/{account_id}")
+def disconnect_youtube_account(
+    account_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """YouTubeアカウントの連携を切断"""
+    account = db.query(YouTubeAccount).filter(
+        YouTubeAccount.id == account_id,
+        YouTubeAccount.user_id == current_user.id,
+    ).first()
+
+    if not account:
+        raise HTTPException(status_code=404, detail="アカウントが見つかりません")
+
+    account.is_active = False
+    account.access_token_encrypted = None
+    account.refresh_token_encrypted = None
+    db.commit()
+    return {"message": "YouTube連携を切断しました"}
+
+
+# ─────────────────────────────────────────
+#  データ取得・メトリクス
+# ─────────────────────────────────────────
 
 @router.post("/sync-weekly")
 def sync_weekly_data(
@@ -98,13 +191,19 @@ def get_weekly_metrics(
     current_user: User = Depends(get_current_user),
 ):
     """週次メトリクス一覧を取得"""
-    metrics = db.query(WeeklyMetrics).order_by(
-        WeeklyMetrics.week_start_date.desc()
-    ).limit(limit).all()
+    # ログインユーザーのアカウントに絞る
+    account_ids = [
+        a.id for a in db.query(YouTubeAccount).filter(
+            YouTubeAccount.user_id == current_user.id
+        ).all()
+    ]
 
-    result = []
-    for m in metrics:
-        result.append({
+    metrics = db.query(WeeklyMetrics).filter(
+        WeeklyMetrics.youtube_account_id.in_(account_ids)
+    ).order_by(WeeklyMetrics.week_start_date.desc()).limit(limit).all()
+
+    return [
+        {
             "id": str(m.id),
             "week_start_date": m.week_start_date.isoformat() if m.week_start_date else None,
             "week_end_date": m.week_end_date.isoformat() if m.week_end_date else None,
@@ -119,8 +218,9 @@ def get_weekly_metrics(
             "total_comments": m.total_comments,
             "views_change_rate": m.views_change_rate,
             "ctr_change_rate": m.ctr_change_rate,
-        })
-    return result
+        }
+        for m in metrics
+    ]
 
 
 @router.get("/videos")
@@ -130,9 +230,15 @@ def get_videos(
     current_user: User = Depends(get_current_user),
 ):
     """動画一覧を取得"""
-    videos = db.query(VideoMetrics).order_by(
-        VideoMetrics.published_at.desc()
-    ).limit(limit).all()
+    account_ids = [
+        a.id for a in db.query(YouTubeAccount).filter(
+            YouTubeAccount.user_id == current_user.id
+        ).all()
+    ]
+
+    videos = db.query(VideoMetrics).filter(
+        VideoMetrics.youtube_account_id.in_(account_ids)
+    ).order_by(VideoMetrics.published_at.desc()).limit(limit).all()
 
     return [
         {
