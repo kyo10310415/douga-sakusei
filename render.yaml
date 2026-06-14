@@ -23,6 +23,8 @@ services:
     region: oregon
     healthCheckPath: /health
     autoDeploy: true
+    # 外部からのアクセスを許可（デフォルトをPublicに明示）
+    numInstances: 1
 
     envVars:
       # App

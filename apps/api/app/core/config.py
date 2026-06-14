@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-this-secret-key"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
-    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8000"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,https://vtuber-studio-web.onrender.com"
 
     # Database
     DATABASE_URL: str = "postgresql://vtuber:vtuber_pass@localhost:5432/vtuber_studio"
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # YouTube OAuth
     YOUTUBE_CLIENT_ID: str = ""
     YOUTUBE_CLIENT_SECRET: str = ""
-    YOUTUBE_REDIRECT_URI: str = "http://localhost:8000/api/youtube/oauth/callback"
+    YOUTUBE_REDIRECT_URI: str = "https://vtuber-studio-api-p1yp.onrender.com/api/youtube/oauth/callback"
 
     # OpenAI
     OPENAI_API_KEY: str = ""
