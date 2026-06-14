@@ -25,6 +25,7 @@ app.add_middleware(
 
 # 静的ファイルサービス
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+os.makedirs("static", exist_ok=True)  # static/ ディレクトリがなくても起動できるよう作成
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # APIルーターを登録
