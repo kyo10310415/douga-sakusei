@@ -1,0 +1,219 @@
+# render.yaml - VTuber Studio 本番インフラ定義
+# Render Blueprint (IaC) https://render.com/docs/blueprint-spec
+#
+# 含まれるサービス:
+#   - api        : FastAPI Web Service (Dockerfile)
+#   - worker     : Celery Background Worker (Dockerfile)
+#   - web        : Next.js 14 Web Service (Dockerfile)
+#   - db         : PostgreSQL 16 Managed Database
+#   - redis      : Redis Managed Instance
+
+services:
+  # ===========================================================
+  # 1. FastAPI バックエンド API
+  # ===========================================================
+  - type: web
+    name: vtuber-studio-api
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    plan: starter          # 無料枠 → 本番は standard に変更
+    region: oregon         # singapore も可
+    healthCheckPath: /health
+    autoDeploy: true       # main ブランチへのプッシュで自動デプロイ
+
+    envVars:
+      # App
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true   # Renderが自動生成
+      - key: ALLOWED_ORIGINS
+        sync: false           # Renderダッシュボードで手動設定（フロントURLを入力）
+
+      # Database（PostgreSQL サービスから自動注入）
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vtuber-studio-db
+          property: connectionString
+
+      # Redis（Redis サービスから自動注入）
+      - key: REDIS_URL
+        fromService:
+          name: vtuber-studio-redis
+          type: redis
+          property: connectionString
+
+      # YouTube OAuth（Renderダッシュボードで手動設定）
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REDIRECT_URI
+        sync: false           # 例: https://vtuber-studio-api.onrender.com/api/youtube/oauth/callback
+
+      # OpenAI
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # TTS / Image / Video providers
+      - key: TTS_PROVIDER
+        value: mock           # 本番切り替え時に変更
+      - key: TTS_API_KEY
+        sync: false
+      - key: IMAGE_GENERATION_PROVIDER
+        value: mock
+      - key: IMAGE_GENERATION_API_KEY
+        sync: false
+      - key: VIDEO_GENERATION_PROVIDER
+        value: mock
+      - key: VIDEO_GENERATION_API_KEY
+        sync: false
+
+      # Storage（Renderの/tmp は永続化されないため、S3/R2推奨）
+      - key: STORAGE_PROVIDER
+        value: local          # 本番は s3 に変更を推奨
+      - key: STORAGE_BUCKET
+        value: vtuber-uploads
+      - key: STORAGE_ACCESS_KEY
+        sync: false
+      - key: STORAGE_SECRET_KEY
+        sync: false
+      - key: UPLOAD_DIR
+        value: /tmp/uploads
+
+  # ===========================================================
+  # 2. Celery バックグラウンドワーカー
+  # ===========================================================
+  - type: worker
+    name: vtuber-studio-worker
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    plan: starter
+    region: oregon
+    autoDeploy: true
+    # Celeryワーカーとして起動（CMDを上書き）
+    dockerCommand: >
+      celery -A app.jobs.celery_app worker
+      --loglevel=info
+      --concurrency=2
+      -Q youtube,ai,video,upload,default
+
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: SECRET_KEY
+        fromService:
+          name: vtuber-studio-api
+          type: web
+          envVarKey: SECRET_KEY
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vtuber-studio-db
+          property: connectionString
+
+      - key: REDIS_URL
+        fromService:
+          name: vtuber-studio-redis
+          type: redis
+          property: connectionString
+
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TTS_PROVIDER
+        value: mock
+      - key: TTS_API_KEY
+        sync: false
+      - key: IMAGE_GENERATION_PROVIDER
+        value: mock
+      - key: IMAGE_GENERATION_API_KEY
+        sync: false
+      - key: VIDEO_GENERATION_PROVIDER
+        value: mock
+      - key: VIDEO_GENERATION_API_KEY
+        sync: false
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: UPLOAD_DIR
+        value: /tmp/uploads
+
+  # ===========================================================
+  # 3. Celery Beat スケジューラ（週次分析Cron）
+  # ===========================================================
+  - type: worker
+    name: vtuber-studio-beat
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    plan: starter
+    region: oregon
+    autoDeploy: true
+    dockerCommand: >
+      celery -A app.jobs.celery_app beat
+      --loglevel=info
+      --scheduler celery.beat:PersistentScheduler
+
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vtuber-studio-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: vtuber-studio-redis
+          type: redis
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+
+  # ===========================================================
+  # 4. Next.js フロントエンド
+  # ===========================================================
+  - type: web
+    name: vtuber-studio-web
+    runtime: docker
+    dockerfilePath: ./apps/web/Dockerfile
+    dockerContext: ./apps/web
+    plan: starter
+    region: oregon
+    autoDeploy: true
+
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        # Renderダッシュボードで手動設定:
+        # 例: https://vtuber-studio-api.onrender.com
+        sync: false
+      - key: NODE_ENV
+        value: production
+
+  # ===========================================================
+  # 5. Redis（Celery ブローカー + 結果バックエンド）
+  # ===========================================================
+  - type: redis
+    name: vtuber-studio-redis
+    plan: free                 # 本番は starter 以上を推奨
+    region: oregon
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []            # Render内部からのみ許可
+
+# ===========================================================
+# 6. PostgreSQL データベース
+# ===========================================================
+databases:
+  - name: vtuber-studio-db
+    databaseName: vtuber_studio
+    plan: free                 # 本番は starter 以上を推奨（free は90日で削除）
+    region: oregon
+    postgresMajorVersion: 16

@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# FFmpeg インストール
+# FFmpeg + 必要なシステムパッケージ
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libpq-dev \
@@ -10,11 +10,20 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# 依存関係を先にコピー（キャッシュ効率化）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# アプリコードをコピー
 COPY . .
+
+# 起動スクリプトに実行権限を付与
+RUN chmod +x /app/start.sh
+
+# アップロードディレクトリ作成
+RUN mkdir -p /tmp/uploads
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# start.sh でマイグレーション→サーバー起動
+CMD ["/app/start.sh"]

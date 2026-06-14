@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, String, DateTime, Text, ForeignKey, JSON
+    Column, String, DateTime, Integer, Text, ForeignKey, JSON
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -35,8 +35,8 @@ class AIAnalysisReport(Base, UUIDMixin, TimestampMixin):
     # メタ
     ai_provider = Column(String(50), nullable=True)  # openai | mock
     ai_model = Column(String(100), nullable=True)
-    prompt_tokens = Column(Column(String(20)), nullable=True)
-    completion_tokens = Column(Column(String(20)), nullable=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
 
     error_message = Column(Text, nullable=True)
     analyzed_at = Column(DateTime, nullable=True)
