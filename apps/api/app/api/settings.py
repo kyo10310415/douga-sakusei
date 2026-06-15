@@ -4,7 +4,7 @@ from typing import Optional, Any
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.core.deps import get_current_admin_user
+from app.core.deps import get_current_admin_user, get_current_user
 from app.models.user import User
 from app.models.log import SystemSetting
 
@@ -66,7 +66,7 @@ def update_settings(
 @router.get("/scheduler")
 def get_scheduler_settings(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_user),  # 一般ユーザーも参照可能
 ):
     """スケジューラー設定を取得"""
     setting = db.query(SystemSetting).filter(

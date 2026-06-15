@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { settingsApi, youtubeApi } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
 
 const DAY_OPTIONS = [
   { value: 0, label: '日曜日' },
@@ -26,6 +27,8 @@ type YouTubeAccount = {
 }
 
 export default function SettingsPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin ?? false
   const searchParams = useSearchParams()
   const [scheduler, setScheduler] = useState({ day_of_week: 1, hour: 9, minute: 0, enabled: true })
   const [loading, setLoading] = useState(true)
@@ -56,7 +59,12 @@ export default function SettingsPage() {
   useEffect(() => {
     settingsApi.getScheduler()
       .then(res => setScheduler(res.data))
-      .catch(console.error)
+      .catch(err => {
+        // 管理者権限エラー(403)は無視してデフォルト値のまま表示
+        if (err.response?.status !== 403) {
+          console.error('scheduler fetch error:', err)
+        }
+      })
       .finally(() => setLoading(false))
     fetchAccounts()
   }, [fetchAccounts])
@@ -227,6 +235,7 @@ export default function SettingsPage() {
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 mb-6">
         <h2 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-lg">
           <span>⏰</span> 週次ジョブスケジューラー
+          {!isAdmin && <span className="text-xs text-gray-400 font-normal ml-1">（閲覧のみ）</span>}
         </h2>
         <p className="text-sm text-gray-500 mb-4">
           毎週自動で「YouTube取得→AI分析→動画生成→限定公開アップロード」を実行する時刻を設定します。
@@ -238,8 +247,9 @@ export default function SettingsPage() {
               type="checkbox"
               id="scheduler_enabled"
               checked={scheduler.enabled}
-              onChange={e => setScheduler({ ...scheduler, enabled: e.target.checked })}
-              className="w-4 h-4 rounded accent-purple-500"
+              onChange={e => isAdmin && setScheduler({ ...scheduler, enabled: e.target.checked })}
+              disabled={!isAdmin}
+              className="w-4 h-4 rounded accent-purple-500 disabled:opacity-50"
             />
             <label htmlFor="scheduler_enabled" className="text-sm font-medium text-gray-700">
               自動実行を有効にする
@@ -252,7 +262,7 @@ export default function SettingsPage() {
               <select
                 value={scheduler.day_of_week}
                 onChange={e => setScheduler({ ...scheduler, day_of_week: parseInt(e.target.value) })}
-                disabled={!scheduler.enabled}
+                disabled={!scheduler.enabled || !isAdmin}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
               >
                 {DAY_OPTIONS.map(opt => (
@@ -266,7 +276,7 @@ export default function SettingsPage() {
                 type="number" min="0" max="23"
                 value={scheduler.hour}
                 onChange={e => setScheduler({ ...scheduler, hour: parseInt(e.target.value) })}
-                disabled={!scheduler.enabled}
+                disabled={!scheduler.enabled || !isAdmin}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
               />
             </div>
@@ -276,7 +286,7 @@ export default function SettingsPage() {
                 type="number" min="0" max="59"
                 value={scheduler.minute}
                 onChange={e => setScheduler({ ...scheduler, minute: parseInt(e.target.value) })}
-                disabled={!scheduler.enabled}
+                disabled={!scheduler.enabled || !isAdmin}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
               />
             </div>
@@ -289,13 +299,19 @@ export default function SettingsPage() {
           )}
         </div>
 
-        <button
-          onClick={handleSaveScheduler}
-          disabled={saving}
-          className="mt-4 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium"
-        >
-          {saving ? '保存中...' : '設定を保存'}
-        </button>
+        {isAdmin ? (
+          <button
+            onClick={handleSaveScheduler}
+            disabled={saving}
+            className="mt-4 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium"
+          >
+            {saving ? '保存中...' : '設定を保存'}
+          </button>
+        ) : (
+          <p className="mt-4 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
+            ⚠️ スケジューラー設定の変更は管理者アカウントのみ可能です
+          </p>
+        )}
       </div>
 
       {/* 自動化フロー説明 */}
