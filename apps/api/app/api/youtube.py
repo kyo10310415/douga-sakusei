@@ -4,7 +4,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from pydantic import BaseModel
-import jwt as pyjwt
+from jose import jwt as pyjwt, JWTError, ExpiredSignatureError
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -57,9 +57,9 @@ def oauth_callback(
         try:
             payload = pyjwt.decode(state, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
             user_id = payload.get("user_id")
-        except pyjwt.ExpiredSignatureError:
+        except ExpiredSignatureError:
             return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=state_expired")
-        except Exception:
+        except JWTError:
             return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=invalid_state")
 
     if not user_id:
