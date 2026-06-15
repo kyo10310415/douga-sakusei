@@ -71,13 +71,46 @@ def oauth_callback(
 
     try:
         tokens = youtube_service.exchange_code_for_tokens(code)
+    except Exception as e:
+        # トークン交換失敗（client_id/secret不正など）
+        import logging
+        logging.error(f"[YouTube OAuth] token exchange failed: {e}")
+        reason = str(e)[:120].replace("\n", " ")
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=token_exchange_failed")
+
+    # チャンネル情報取得（失敗してもトークン保存は続行）
+    channel_info: dict = {}
+    channel_id_fallback: Optional[str] = None
+    try:
         channel_info = youtube_service.get_channel_info(
             tokens["access_token"], tokens.get("refresh_token", "")
         )
+        channel_id_fallback = channel_info.get("channel_id")
+    except Exception as e:
+        import logging
+        logging.warning(f"[YouTube OAuth] get_channel_info failed (YouTube Data API possibly not enabled): {e}")
+        # channel_id なしでも一時的に保存できるよう sub から取る
+        # access_token の sub クレーム（Google の user_id）を channel_id として使う
+        # → 後で sync ジョブで上書き可能
+        try:
+            import base64, json as _json
+            parts = tokens["access_token"].split(".")
+            if len(parts) >= 2:
+                padded = parts[1] + "=="
+                decoded = _json.loads(base64.urlsafe_b64decode(padded))
+                channel_id_fallback = decoded.get("sub", f"pending_{user_id[:8]}")
+            else:
+                channel_id_fallback = f"pending_{user_id[:8]}"
+        except Exception:
+            channel_id_fallback = f"pending_{user_id[:8]}"
 
+    if not channel_id_fallback:
+        channel_id_fallback = f"pending_{user_id[:8]}"
+
+    try:
         # 既存チェック（同チャンネルIDがあれば更新）
         existing = db.query(YouTubeAccount).filter(
-            YouTubeAccount.channel_id == channel_info["channel_id"]
+            YouTubeAccount.channel_id == channel_id_fallback
         ).first()
 
         if existing:
@@ -85,24 +118,25 @@ def oauth_callback(
             existing.access_token_encrypted = encrypt_token(tokens["access_token"])
             if tokens.get("refresh_token"):
                 existing.refresh_token_encrypted = encrypt_token(tokens["refresh_token"])
-            existing.channel_title = channel_info.get("title")
-            existing.channel_thumbnail_url = channel_info.get("thumbnail_url")
-            existing.subscriber_count = channel_info.get("subscriber_count")
-            existing.video_count = channel_info.get("video_count")
-            existing.view_count = channel_info.get("view_count")
+            if channel_info:
+                existing.channel_title = channel_info.get("title")
+                existing.channel_thumbnail_url = channel_info.get("thumbnail_url")
+                existing.subscriber_count = channel_info.get("subscriber_count")
+                existing.video_count = channel_info.get("video_count")
+                existing.view_count = channel_info.get("view_count")
             existing.last_synced_at = datetime.utcnow()
             existing.is_active = True
             db.commit()
         else:
             account = YouTubeAccount(
                 user_id=user.id,
-                channel_id=channel_info["channel_id"],
-                channel_title=channel_info.get("title"),
-                channel_description=channel_info.get("description"),
-                channel_thumbnail_url=channel_info.get("thumbnail_url"),
-                subscriber_count=channel_info.get("subscriber_count"),
-                video_count=channel_info.get("video_count"),
-                view_count=channel_info.get("view_count"),
+                channel_id=channel_id_fallback,
+                channel_title=channel_info.get("title") if channel_info else None,
+                channel_description=channel_info.get("description") if channel_info else None,
+                channel_thumbnail_url=channel_info.get("thumbnail_url") if channel_info else None,
+                subscriber_count=channel_info.get("subscriber_count") if channel_info else None,
+                video_count=channel_info.get("video_count") if channel_info else None,
+                view_count=channel_info.get("view_count") if channel_info else None,
                 access_token_encrypted=encrypt_token(tokens["access_token"]),
                 refresh_token_encrypted=encrypt_token(tokens["refresh_token"]) if tokens.get("refresh_token") else None,
                 oauth_scopes=tokens.get("scopes", []),
@@ -110,10 +144,16 @@ def oauth_callback(
             db.add(account)
             db.commit()
 
+        # channel_infoが取れなかった場合はwarning付きのsuccessリダイレクト
+        if not channel_info:
+            return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=success&warning=channel_info_unavailable")
+
         return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=success")
 
     except Exception as e:
-        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason={str(e)[:100]}")
+        import logging
+        logging.error(f"[YouTube OAuth] DB save failed: {e}")
+        return RedirectResponse(url=f"{web_url}/dashboard/settings?youtube=error&reason=db_save_failed")
 
 
 # ─────────────────────────────────────────

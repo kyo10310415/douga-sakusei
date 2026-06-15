@@ -72,8 +72,13 @@ export default function SettingsPage() {
   // コールバック結果をURLパラメータから受け取る
   useEffect(() => {
     const youtube = searchParams.get('youtube')
+    const warning = searchParams.get('warning')
     if (youtube === 'success') {
-      showToast('success', 'YouTubeアカウントの連携が完了しました！')
+      if (warning === 'channel_info_unavailable') {
+        showToast('success', 'YouTubeアカウントを連携しました（チャンネル情報は後で同期されます）')
+      } else {
+        showToast('success', 'YouTubeアカウントの連携が完了しました！')
+      }
       fetchAccounts()
       // URLをクリーンアップ
       window.history.replaceState({}, '', '/dashboard/settings')
