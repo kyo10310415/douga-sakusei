@@ -117,6 +117,12 @@ export default function CharactersPage() {
     // 再生中なら停止
     if (isPlaying) { stopPreview(); return }
 
+    // VOICEVOX はローカルサーバー必須のためクラウド環境では使用不可
+    if (form.tts_provider === 'voicevox') {
+      setPreviewError('VOICEVOXはローカル環境専用です。クラウド（Render等）では利用できません。ローカルで VOICEVOX を起動してから開発環境でお試しください。')
+      return
+    }
+
     const voiceType = form.tts_provider === 'elevenlabs' && form.voice_type === '__custom__'
       ? customVoiceId
       : form.voice_type
@@ -204,18 +210,31 @@ export default function CharactersPage() {
       source.buffer = audioBuffer
       source.connect(audioCtx.destination)
 
+      // AudioContext を安全にcloseするヘルパー（二重close防止）
+      const safeClose = () => {
+        if (audioCtx.state !== 'closed') {
+          audioCtx.close().catch(() => {})
+        }
+      }
+
       source.onended = () => {
         console.log('[TTS Preview] 再生終了')
         setIsPlaying(false)
-        audioCtx.close()
+        safeClose()
+        audioRef.current = null
       }
 
       source.start(0)
       console.log('[TTS Preview] source.start() 呼び出し完了')
       setIsPlaying(true)
 
-      // 停止用の関数を audioRef に保持
-      ;(audioRef as any).current = { gsStop: () => { source.stop(); audioCtx.close() } }
+      // 停止用の関数を audioRef に保持（safeClose を使うので二重close不要）
+      ;(audioRef as any).current = {
+        gsStop: () => {
+          try { source.stop() } catch (_) {}
+          safeClose()
+        }
+      }
     } catch (err: any) {
       // デバッグ: ステータス・URL・レスポンス内容をコンソールに出力
       const status = err.response?.status
@@ -529,16 +548,22 @@ export default function CharactersPage() {
                             : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300'
                         }`}
                       >
-                        <span className="font-medium">
+                        <span className="font-medium flex items-center gap-1">
                           {key === 'mock' && '🔇 モック'}
                           {key === 'openai' && '🤖 OpenAI TTS'}
                           {key === 'voicevox' && '🎌 VOICEVOX'}
                           {key === 'elevenlabs' && '⚡ ElevenLabs'}
+                          {/* VOICEVOXはローカル専用バッジ */}
+                          {key === 'voicevox' && (
+                            <span className="text-[10px] bg-yellow-400 text-yellow-900 font-bold px-1 py-0.5 rounded leading-none">
+                              ローカル専用
+                            </span>
+                          )}
                         </span>
                         <span className={`block text-xs mt-0.5 ${form.tts_provider === key ? 'text-purple-100' : 'text-gray-400'}`}>
                           {key === 'mock' && '音声なし・開発用'}
                           {key === 'openai' && '6種類の声・英語得意'}
-                          {key === 'voicevox' && '日本語専用・無料'}
+                          {key === 'voicevox' && 'ローカルVOICEVOX起動が必要'}
                           {key === 'elevenlabs' && '高品質・英日対応'}
                         </span>
                       </button>
