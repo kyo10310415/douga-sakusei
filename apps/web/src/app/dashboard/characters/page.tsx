@@ -145,24 +145,38 @@ export default function CharactersPage() {
       await audio.play()
       setIsPlaying(true)
     } catch (err: any) {
-      // 422 / 502 はサーバーから hint 付きエラーが返る
+      // デバッグ: ステータス・URL・レスポンス内容をコンソールに出力
+      const status = err.response?.status
+      const reqUrl = err.config?.url || err.config?.baseURL + err.config?.url
+      console.error('[TTS Preview Error]', {
+        status,
+        url: reqUrl,
+        baseURL: err.config?.baseURL,
+        data: err.response?.data,
+      })
+
       const detail = err.response?.data
+      let errorMsg = ''
+
       if (detail) {
         // blob レスポンスの場合は JSON をパース
         if (detail instanceof Blob) {
           const text = await detail.text()
           try {
             const json = JSON.parse(text)
-            setPreviewError(json.detail?.error || json.detail || text)
+            errorMsg = json.detail?.error || json.detail || text
           } catch {
-            setPreviewError(text)
+            errorMsg = text
           }
         } else {
-          setPreviewError(detail.detail?.error || detail.detail || String(detail))
+          errorMsg = detail.detail?.error || detail.detail || String(detail)
         }
       } else {
-        setPreviewError('音声の生成に失敗しました')
+        errorMsg = '音声の生成に失敗しました'
       }
+
+      // ステータスコードを表示に含める（診断用）
+      setPreviewError(status ? `[HTTP ${status}] ${errorMsg}` : errorMsg)
     } finally {
       setPreviewLoading(false)
     }
@@ -560,13 +574,16 @@ export default function CharactersPage() {
                     {previewError && (
                       <div className="mt-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
                         <p className="font-medium">⚠️ {previewError}</p>
-                        {form.tts_provider === 'openai' && (
+                        {previewError.includes('405') && (
+                          <p className="mt-0.5 text-red-500">→ バックエンドAPIのルート設定エラーです。最新のデプロイが完了しているか確認してください</p>
+                        )}
+                        {!previewError.includes('405') && form.tts_provider === 'openai' && (
                           <p className="mt-0.5 text-red-500">→ Render の環境変数に <code className="bg-red-100 px-1 rounded">OPENAI_API_KEY</code> を設定してください</p>
                         )}
-                        {form.tts_provider === 'elevenlabs' && (
+                        {!previewError.includes('405') && form.tts_provider === 'elevenlabs' && (
                           <p className="mt-0.5 text-red-500">→ Render の環境変数に <code className="bg-red-100 px-1 rounded">TTS_API_KEY</code>（ElevenLabs APIキー）を設定してください</p>
                         )}
-                        {form.tts_provider === 'voicevox' && (
+                        {!previewError.includes('405') && form.tts_provider === 'voicevox' && (
                           <p className="mt-0.5 text-red-500">→ VOICEVOX はローカル環境でのみ動作します（Render 本番環境では利用不可）</p>
                         )}
                       </div>
