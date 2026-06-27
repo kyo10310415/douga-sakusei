@@ -31,6 +31,31 @@ def health_check():
     return {"status": "ok", "service": "VTuber Studio API"}
 
 
+@app.get("/version", tags=["system"])
+def version_check():
+    """デプロイバージョン診断用エンドポイント"""
+    import os, hashlib
+    chars_path = os.path.join(os.path.dirname(__file__), "api", "characters.py")
+    try:
+        with open(chars_path, "rb") as f:
+            content = f.read()
+        file_hash = hashlib.md5(content).hexdigest()[:8]
+        has_tts_preview = b"tts-preview" in content
+        tts_line = None
+        for i, line in enumerate(content.decode().splitlines(), 1):
+            if "@router.post" in line and "tts-preview" in line:
+                tts_line = i
+                break
+    except Exception as e:
+        return {"error": str(e)}
+    return {
+        "characters_py_hash": file_hash,
+        "has_tts_preview_route": has_tts_preview,
+        "tts_preview_line": tts_line,
+        "file_size_bytes": len(content),
+    }
+
+
 # 静的ファイルサービス
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs("static", exist_ok=True)
