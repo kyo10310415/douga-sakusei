@@ -117,6 +117,14 @@ export default function CharactersPage() {
     setPreviewLoading(true)
     setPreviewError('')
 
+    // デバッグ: ボタン押下とリクエスト情報をコンソールに出力
+    console.log('[TTS Preview] リクエスト開始', {
+      provider: form.tts_provider,
+      voice_type: voiceType,
+      apiBase: apiClient.defaults.baseURL,
+      fullUrl: (apiClient.defaults.baseURL || '') + '/characters/tts-preview',
+    })
+
     try {
       const res = await apiClient.post(
         '/characters/tts-preview',
@@ -130,6 +138,8 @@ export default function CharactersPage() {
         },
         { responseType: 'blob' }
       )
+
+      console.log('[TTS Preview] レスポンス受信', { status: res.status, contentType: res.headers['content-type'] })
 
       // Blob → ObjectURL → Audio 再生
       // AxiosResponseHeaders の値型は string|number|boolean|string[] なので String() でキャスト
