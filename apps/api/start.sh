@@ -4,6 +4,7 @@
 # 2. Celery Worker をバックグラウンドで起動
 # 3. Celery Beat  をバックグラウンドで起動
 # 4. Uvicorn（API）をフォアグラウンドで起動
+# [2026-06-27] tts-preview route fix: force redeploy
 
 set -e
 
