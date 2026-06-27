@@ -14,6 +14,14 @@ const navItems = [
   { href: '/dashboard/settings', label: '設定', icon: '⚙️' },
 ]
 
+const promoNavItems = [
+  { href: '/dashboard/promo', label: '宣伝ダッシュボード', icon: '📣' },
+  { href: '/dashboard/promo/generate', label: '投稿生成', icon: '✨' },
+  { href: '/dashboard/promo/posts', label: '投稿管理', icon: '📝' },
+  { href: '/dashboard/promo/assets', label: '素材管理', icon: '🖼️' },
+  { href: '/dashboard/promo/analytics', label: '宣伝分析', icon: '📈' },
+]
+
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { user, loading, logout } = useAuth()
   const router = useRouter()
@@ -58,14 +66,40 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </button>
         </div>
 
-        <nav className="flex-1 py-4">
+        <nav className="flex-1 py-4 overflow-y-auto">
           {navItems.map(item => (
             <Link
               key={item.href}
               href={item.href}
               className={`flex items-center gap-3 px-4 py-3 text-sm hover:bg-gray-700 transition-colors ${
-                pathname === item.href || pathname.startsWith(item.href + '/') 
+                pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'))
                   ? 'bg-purple-700 text-white' 
+                  : 'text-gray-300'
+              }`}
+            >
+              <span className="text-lg flex-shrink-0">{item.icon}</span>
+              {sidebarOpen && <span>{item.label}</span>}
+            </Link>
+          ))}
+
+          {/* コンサル宣伝セクション */}
+          {sidebarOpen && (
+            <div className="px-4 pt-4 pb-1">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                コンサル宣伝
+              </span>
+            </div>
+          )}
+          {!sidebarOpen && (
+            <div className="border-t border-gray-700 my-2" />
+          )}
+          {promoNavItems.map(item => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-3 px-4 py-3 text-sm hover:bg-gray-700 transition-colors ${
+                pathname === item.href || (item.href !== '/dashboard/promo' && pathname.startsWith(item.href + '/'))
+                  ? 'bg-pink-700 text-white'
                   : 'text-gray-300'
               }`}
             >

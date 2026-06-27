@@ -46,6 +46,7 @@ from app.api.video_jobs import router as video_jobs_router
 from app.api.reviews import router as reviews_router
 from app.api.settings import router as settings_router
 from app.api.dashboard import router as dashboard_router
+from app.api.promo import router as promo_router
 
 API_PREFIX = "/api"
 
@@ -58,6 +59,7 @@ app.include_router(video_jobs_router, prefix=API_PREFIX)
 app.include_router(reviews_router, prefix=API_PREFIX)
 app.include_router(settings_router, prefix=API_PREFIX)
 app.include_router(dashboard_router, prefix=API_PREFIX)
+app.include_router(promo_router, prefix=API_PREFIX)
 
 
 @app.on_event("startup")

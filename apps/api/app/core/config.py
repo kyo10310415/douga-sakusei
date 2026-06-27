@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = ""
 
+    # X (Twitter) API — Basic plan ($100/month)
+    X_API_KEY: str = ""
+    X_API_SECRET: str = ""
+    X_ACCESS_TOKEN: str = ""
+    X_ACCESS_TOKEN_SECRET: str = ""
+    X_BEARER_TOKEN: str = ""
+
     # TTS
     TTS_PROVIDER: str = "mock"
     TTS_API_KEY: str = ""

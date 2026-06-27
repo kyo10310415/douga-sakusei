@@ -126,3 +126,49 @@ export const settingsApi = {
   getScheduler: () => apiClient.get('/settings/scheduler'),
   updateScheduler: (data: any) => apiClient.put('/settings/scheduler', data),
 }
+
+// Promo API（コンサル宣伝システム）
+export const promoApi = {
+  // ── 生成 ──
+  generate: (data: {
+    theme: string
+    platforms: string[]
+    target_segment: string
+    goal: string
+    tone: string
+    cta: string
+    count: number
+    weekly_metrics_id?: string
+  }) => apiClient.post('/promo/generate', data),
+
+  // ── 投稿 CRUD ──
+  listPosts: (params?: { status?: string; platform?: string; limit?: number; offset?: number }) =>
+    apiClient.get('/promo/posts', { params }),
+  getPost: (id: string) => apiClient.get(`/promo/posts/${id}`),
+  updatePost: (id: string, data: any) => apiClient.put(`/promo/posts/${id}`, data),
+  deletePost: (id: string) => apiClient.delete(`/promo/posts/${id}`),
+
+  // ── ワークフロー ──
+  approvePost: (id: string) => apiClient.post(`/promo/posts/${id}/approve`),
+  rejectPost: (id: string, reason: string) =>
+    apiClient.post(`/promo/posts/${id}/reject`, { reason }),
+  publishPost: (id: string) => apiClient.post(`/promo/posts/${id}/publish`),
+  ngCheck: (id: string) => apiClient.post(`/promo/posts/${id}/ng-check`),
+
+  // ── 素材 ──
+  listAssets: (postId: string) => apiClient.get(`/promo/posts/${postId}/assets`),
+  generateAsset: (postId: string, data: { asset_type: string; duration?: string }) =>
+    apiClient.post(`/promo/posts/${postId}/assets/generate`, data),
+
+  // ── 分析 ──
+  getAnalytics: (postId: string) => apiClient.get(`/promo/analytics/${postId}`),
+  upsertAnalytics: (postId: string, data: any) =>
+    apiClient.post(`/promo/analytics/${postId}`, data),
+
+  // ── テンプレート ──
+  listTemplates: (params?: { type?: string; platform?: string }) =>
+    apiClient.get('/promo/templates', { params }),
+
+  // ── ダッシュボード ──
+  getDashboard: () => apiClient.get('/promo/dashboard'),
+}

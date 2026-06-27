@@ -10,6 +10,10 @@ from app.models.video import (
 )
 from app.models.upload import YouTubeUpload, ReviewChecklist, Approval
 from app.models.log import ImprovementLog, SystemSetting, JobLog
+from app.models.promo import (
+    ContentProject, Post, CreativeAsset,
+    PostAnalytics, PromoAIGeneration, PromptTemplate
+)
 
 __all__ = [
     "Base",
@@ -34,4 +38,10 @@ __all__ = [
     "ImprovementLog",
     "SystemSetting",
     "JobLog",
+    "ContentProject",
+    "Post",
+    "CreativeAsset",
+    "PostAnalytics",
+    "PromoAIGeneration",
+    "PromptTemplate",
 ]
