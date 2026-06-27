@@ -99,8 +99,15 @@ export default function CharactersPage() {
   // ── サンプル音声再生 ─────────────────────────────────
   const stopPreview = () => {
     if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.src = ''
+      // AudioContext 方式の停止（gsStop関数が設定されている場合）
+      const ref = audioRef.current as any
+      if (typeof ref.gsStop === 'function') {
+        try { ref.gsStop() } catch (_) {}
+      } else if (typeof ref.pause === 'function') {
+        // フォールバック：従来のHTMLAudioElement
+        ref.pause()
+        ref.src = ''
+      }
       audioRef.current = null
     }
     setIsPlaying(false)
@@ -141,52 +148,74 @@ export default function CharactersPage() {
 
       console.log('[TTS Preview] レスポンス受信', { status: res.status, contentType: res.headers['content-type'] })
 
-      // ── Blob → ObjectURL → Audio 再生 ────────────────────
-      // responseType:'blob' の場合 res.data はすでに Blob オブジェクト。
-      // new Blob([res.data]) と二重ラップすると中身が壊れるため、
-      // res.data をそのまま使い type だけ明示的に上書きする。
+      // ── AudioContext を使った確実な再生 ─────────────────
+      // HTMLAudioElement + ObjectURL はブラウザのAutoplay制限や
+      // Content-Security-Policyに引っかかる場合がある。
+      // ArrayBuffer → AudioContext.decodeAudioData() → 再生 の方が確実。
       const rawBlob: Blob = res.data
-      const contentType = String(res.headers['content-type'] || 'audio/mpeg').split(';')[0].trim()
-      const blob = new Blob([rawBlob], { type: contentType })
-      // ※ Blob を Blob でラップしても実データは保持される（配列要素が Blob の場合 Blob API が正しく処理する）
-      //   ただし type を確実に上書きしたいため再生成している
 
       console.log('[TTS Preview] Blob情報', {
         rawSize: rawBlob.size,
         rawType: rawBlob.type,
-        blobSize: blob.size,
-        blobType: blob.type,
       })
 
-      if (blob.size === 0) {
+      if (rawBlob.size === 0) {
         setPreviewError('音声データが空です。APIキーや設定を確認してください。')
         return
       }
 
-      const url = URL.createObjectURL(blob)
-      const audio = new Audio(url)
-      audioRef.current = audio
+      // Blob → ArrayBuffer に変換
+      const arrayBuffer = await rawBlob.arrayBuffer()
 
-      audio.onended = () => { setIsPlaying(false); URL.revokeObjectURL(url) }
-      audio.onerror = (e) => {
-        console.error('[TTS Preview] audio.onerror', e)
-        setIsPlaying(false)
-        setPreviewError('再生中にエラーが発生しました（ブラウザがこの音声形式に対応していない可能性があります）')
-        URL.revokeObjectURL(url)
+      // AudioContext を生成（既存があれば再利用）
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext
+      const audioCtx = new AudioCtx()
+
+      console.log('[TTS Preview] AudioContext状態', { state: audioCtx.state })
+
+      // suspended（Autoplay制限）なら resume する
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume()
+        console.log('[TTS Preview] AudioContext resume完了', { state: audioCtx.state })
       }
 
+      let audioBuffer: AudioBuffer
       try {
-        await audio.play()
-        setIsPlaying(true)
-      } catch (playErr: any) {
-        console.error('[TTS Preview] audio.play() 失敗', playErr)
-        if (playErr?.name === 'NotAllowedError') {
-          setPreviewError('ブラウザのAutoplay制限により再生できません。画面をクリックしてから再度お試しください。')
-        } else {
-          setPreviewError(`再生に失敗しました: ${playErr?.message || playErr}`)
-        }
-        URL.revokeObjectURL(url)
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
+        console.log('[TTS Preview] デコード成功', {
+          duration: audioBuffer.duration,
+          sampleRate: audioBuffer.sampleRate,
+          numberOfChannels: audioBuffer.numberOfChannels,
+        })
+      } catch (decodeErr: any) {
+        console.error('[TTS Preview] デコード失敗', decodeErr)
+        setPreviewError(`音声のデコードに失敗しました: ${decodeErr?.message || decodeErr}`)
+        audioCtx.close()
+        return
       }
+
+      // 既存の再生を停止
+      if (audioRef.current) {
+        (audioRef.current as any).gsStop?.()
+        audioRef.current = null
+      }
+
+      const source = audioCtx.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(audioCtx.destination)
+
+      source.onended = () => {
+        console.log('[TTS Preview] 再生終了')
+        setIsPlaying(false)
+        audioCtx.close()
+      }
+
+      source.start(0)
+      console.log('[TTS Preview] source.start() 呼び出し完了')
+      setIsPlaying(true)
+
+      // 停止用の関数を audioRef に保持
+      ;(audioRef as any).current = { gsStop: () => { source.stop(); audioCtx.close() } }
     } catch (err: any) {
       // デバッグ: ステータス・URL・レスポンス内容をコンソールに出力
       const status = err.response?.status
