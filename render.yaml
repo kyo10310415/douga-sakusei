@@ -24,8 +24,6 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     numInstances: 1
-    # rootDir を指定してリポジトリ全体の変更でデプロイをトリガー
-    rootDir: apps/api
 
     envVars:
       # App
