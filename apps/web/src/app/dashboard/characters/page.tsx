@@ -1,6 +1,6 @@
 'use client'
-import { useState, useEffect } from 'react'
-import { characterApi } from '@/lib/api'
+import { useState, useEffect, useRef } from 'react'
+import { characterApi, apiClient } from '@/lib/api'
 
 // ── TTSプロバイダーごとの声の種類定義 ─────────────────────────
 const TTS_VOICE_OPTIONS: Record<string, { label: string; options: { value: string; label: string; description?: string }[] }> = {
@@ -59,7 +59,14 @@ export default function CharactersPage() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [customVoiceId, setCustomVoiceId] = useState('')  // ElevenLabs カスタムID用
+  const [customVoiceId, setCustomVoiceId] = useState('')
+
+  // ── サンプル音声プレビュー用 state ──
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState('')
+  const [previewText, setPreviewText] = useState('こんにちは！わたしはAIキャラクターです。この声でよろしければ保存してください。')
+  const [isPlaying, setIsPlaying] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const [form, setForm] = useState({
     name: '',
     age_setting: '',
@@ -80,11 +87,85 @@ export default function CharactersPage() {
     is_default: false,
   })
 
-  // プロバイダーが変わったらvoice_typeをリセット
+  // プロバイダーが変わったらvoice_typeをリセット＆プレビューをクリア
   const handleProviderChange = (provider: string) => {
     const firstOption = TTS_VOICE_OPTIONS[provider]?.options[0]?.value ?? ''
     setForm(prev => ({ ...prev, tts_provider: provider, voice_type: firstOption }))
     setCustomVoiceId('')
+    stopPreview()
+    setPreviewError('')
+  }
+
+  // ── サンプル音声再生 ─────────────────────────────────
+  const stopPreview = () => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.src = ''
+      audioRef.current = null
+    }
+    setIsPlaying(false)
+  }
+
+  const handlePreview = async () => {
+    // 再生中なら停止
+    if (isPlaying) { stopPreview(); return }
+
+    const voiceType = form.tts_provider === 'elevenlabs' && form.voice_type === '__custom__'
+      ? customVoiceId
+      : form.voice_type
+
+    setPreviewLoading(true)
+    setPreviewError('')
+
+    try {
+      const res = await apiClient.post(
+        '/characters/tts-preview',
+        {
+          provider: form.tts_provider,
+          voice_type: voiceType || undefined,
+          speech_rate: form.speech_rate,
+          pitch: form.pitch,
+          emotion_strength: form.emotion_strength,
+          text: previewText,
+        },
+        { responseType: 'blob' }
+      )
+
+      // Blob → ObjectURL → Audio 再生
+      // AxiosResponseHeaders の値型は string|number|boolean|string[] なので String() でキャスト
+      const contentType = String(res.headers['content-type'] || 'audio/mpeg')
+      const blob = new Blob([res.data], { type: contentType })
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audioRef.current = audio
+
+      audio.onended = () => { setIsPlaying(false); URL.revokeObjectURL(url) }
+      audio.onerror = () => { setIsPlaying(false); setPreviewError('再生中にエラーが発生しました') }
+
+      await audio.play()
+      setIsPlaying(true)
+    } catch (err: any) {
+      // 422 / 502 はサーバーから hint 付きエラーが返る
+      const detail = err.response?.data
+      if (detail) {
+        // blob レスポンスの場合は JSON をパース
+        if (detail instanceof Blob) {
+          const text = await detail.text()
+          try {
+            const json = JSON.parse(text)
+            setPreviewError(json.detail?.error || json.detail || text)
+          } catch {
+            setPreviewError(text)
+          }
+        } else {
+          setPreviewError(detail.detail?.error || detail.detail || String(detail))
+        }
+      } else {
+        setPreviewError('音声の生成に失敗しました')
+      }
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
   // 実際に保存するvoice_typeを解決
@@ -434,6 +515,79 @@ export default function CharactersPage() {
                         </p>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* ── サンプル音声プレビュー ── */}
+                {form.tts_provider !== 'mock' && (
+                  <div className="mt-4 bg-purple-50 border border-purple-100 rounded-xl p-4">
+                    <p className="text-xs font-semibold text-purple-700 mb-2">🎧 サンプル音声を聴く</p>
+
+                    {/* サンプルテキスト編集 */}
+                    <div className="mb-3">
+                      <label className="block text-xs text-gray-500 mb-1">読み上げるテキスト（変更可）</label>
+                      <input
+                        type="text"
+                        value={previewText}
+                        onChange={e => setPreviewText(e.target.value)}
+                        maxLength={100}
+                        className="w-full border border-purple-200 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-purple-400 outline-none bg-white"
+                      />
+                      <p className="text-xs text-gray-400 text-right mt-0.5">{previewText.length}/100文字</p>
+                    </div>
+
+                    {/* 再生ボタン */}
+                    <button
+                      type="button"
+                      onClick={handlePreview}
+                      disabled={previewLoading || (form.tts_provider === 'elevenlabs' && form.voice_type === '__custom__' && !customVoiceId.trim())}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${
+                        isPlaying
+                          ? 'bg-red-500 hover:bg-red-600 text-white'
+                          : 'bg-purple-600 hover:bg-purple-700 text-white'
+                      }`}
+                    >
+                      {previewLoading ? (
+                        <><span className="animate-spin">⏳</span> 生成中...</>
+                      ) : isPlaying ? (
+                        <><span>⏹</span> 停止</>
+                      ) : (
+                        <><span>▶</span> 再生してみる</>
+                      )}
+                    </button>
+
+                    {/* エラー表示 */}
+                    {previewError && (
+                      <div className="mt-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+                        <p className="font-medium">⚠️ {previewError}</p>
+                        {form.tts_provider === 'openai' && (
+                          <p className="mt-0.5 text-red-500">→ Render の環境変数に <code className="bg-red-100 px-1 rounded">OPENAI_API_KEY</code> を設定してください</p>
+                        )}
+                        {form.tts_provider === 'elevenlabs' && (
+                          <p className="mt-0.5 text-red-500">→ Render の環境変数に <code className="bg-red-100 px-1 rounded">TTS_API_KEY</code>（ElevenLabs APIキー）を設定してください</p>
+                        )}
+                        {form.tts_provider === 'voicevox' && (
+                          <p className="mt-0.5 text-red-500">→ VOICEVOX はローカル環境でのみ動作します（Render 本番環境では利用不可）</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* プロバイダー別の補足情報 */}
+                    <p className="text-xs text-purple-500 mt-2">
+                      {form.tts_provider === 'openai' && '💡 OpenAI TTS は英語が得意ですが日本語も対応しています'}
+                      {form.tts_provider === 'elevenlabs' && '💡 ElevenLabs は高品質ですが1文字ごとにAPIクレジットを消費します'}
+                      {form.tts_provider === 'voicevox' && '💡 VOICEVOX はローカル環境（PC上）でのみ再生できます'}
+                    </p>
+                  </div>
+                )}
+
+                {/* mock のサンプルは無音なので案内のみ */}
+                {form.tts_provider === 'mock' && (
+                  <div className="mt-4 bg-gray-50 border border-gray-200 rounded-xl p-4">
+                    <p className="text-xs text-gray-500">
+                      🔇 モックは音声なし（無音）です。動画生成ジョブのテスト実行には使えますが、実際の音声は生成されません。
+                      本番運用には <strong>OpenAI TTS</strong>（英語・日本語）または <strong>VOICEVOX</strong>（日本語専用・無料）をお選びください。
+                    </p>
                   </div>
                 )}
 
