@@ -33,6 +33,7 @@ class CharacterCreate(BaseModel):
     speech_samples: Optional[str] = None
     tts_provider: Optional[str] = "mock"
     voice_type: Optional[str] = None
+    voice_instructions: Optional[str] = None  # gpt-4o-mini-tts 用スタイル指示
     speech_rate: Optional[float] = 1.0
     pitch: Optional[float] = 0.0
     emotion_strength: Optional[float] = 0.7
@@ -40,12 +41,13 @@ class CharacterCreate(BaseModel):
 
 
 class TTSPreviewRequest(BaseModel):
-    provider: str                          # mock / openai / elevenlabs / voicevox
-    voice_type: Optional[str] = None       # 声のID / 種類
+    provider: str                               # mock / openai / elevenlabs / voicevox
+    voice_type: Optional[str] = None            # 声のID / 種類
+    voice_instructions: Optional[str] = None    # gpt-4o-mini-tts 用スタイル指示
     speech_rate: Optional[float] = 1.0
     pitch: Optional[float] = 0.0
     emotion_strength: Optional[float] = 0.7
-    text: Optional[str] = None             # カスタムテキスト（省略時はデフォルト文）
+    text: Optional[str] = None                  # カスタムテキスト（省略時はデフォルト文）
 
 
 # プロバイダーごとのデフォルトサンプルテキスト
@@ -109,7 +111,7 @@ async def tts_preview(
         audio_bytes = _generate_silent_wav(text, req.speech_rate or 1.0)
         return Response(content=audio_bytes, media_type="audio/wav")
 
-    # ── OpenAI TTS ────────────────────────────────────────
+    # ── OpenAI TTS (gpt-4o-mini-tts) ──────────────────────
     if provider == "openai":
         api_key = settings.TTS_API_KEY or settings.OPENAI_API_KEY
         if not api_key:
@@ -125,12 +127,23 @@ async def tts_preview(
             import openai as _openai
             client = _openai.AsyncOpenAI(api_key=api_key)
             voice = req.voice_type or "nova"
-            response = await client.audio.speech.create(
-                model="tts-1",
-                voice=voice,
-                input=text,
-                speed=max(0.25, min(4.0, req.speech_rate or 1.0)),
+
+            # gpt-4o-mini-tts は instructions パラメータでしゃべり方を制御できる
+            # 未指定の場合はデフォルト指示（自然な日本語ナレーター）を使用
+            instructions = req.voice_instructions or (
+                "あなたはVTuberのナレーターです。"
+                "自然で聞き取りやすい日本語で、明るく親しみやすいトーンで話してください。"
             )
+
+            create_params: dict = {
+                "model": "gpt-4o-mini-tts",
+                "voice": voice,
+                "input": text,
+                "speed": max(0.25, min(4.0, req.speech_rate or 1.0)),
+                "instructions": instructions,
+            }
+
+            response = await client.audio.speech.create(**create_params)
             audio_bytes = response.content
             return Response(content=audio_bytes, media_type="audio/mpeg")
         except Exception as e:
@@ -389,6 +402,7 @@ def _character_to_dict(c: CharacterProfile) -> dict:
         "speech_samples": c.speech_samples,
         "tts_provider": c.tts_provider,
         "voice_type": c.voice_type,
+        "voice_instructions": c.voice_instructions,
         "speech_rate": c.speech_rate,
         "pitch": c.pitch,
         "emotion_strength": c.emotion_strength,

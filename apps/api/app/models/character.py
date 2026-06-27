@@ -24,10 +24,11 @@ class CharacterProfile(Base, UUIDMixin, TimestampMixin):
 
     # 音声設定
     tts_provider = Column(String(50), default="mock")  # openai|elevenlabs|voicevox|mock
-    voice_type = Column(String(100), nullable=True)  # 声の種類/ID
-    speech_rate = Column(Float, default=1.0)  # 話速
-    pitch = Column(Float, default=0.0)  # ピッチ
-    emotion_strength = Column(Float, default=0.7)  # 感情表現の強さ
+    voice_type = Column(String(100), nullable=True)    # 声の種類/ID
+    voice_instructions = Column(Text, nullable=True)   # gpt-4o-mini-tts 用スタイル指示
+    speech_rate = Column(Float, default=1.0)           # 話速
+    pitch = Column(Float, default=0.0)                 # ピッチ
+    emotion_strength = Column(Float, default=0.7)      # 感情表現の強さ
 
     is_active = Column(Boolean, default=True)
     is_default = Column(Boolean, default=False)

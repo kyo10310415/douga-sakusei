@@ -63,7 +63,7 @@ class MockTTSService(BaseTTSService):
 
 
 class OpenAITTSService(BaseTTSService):
-    """OpenAI TTS API"""
+    """OpenAI TTS API (gpt-4o-mini-tts)"""
 
     def __init__(self):
         import openai
@@ -77,13 +77,20 @@ class OpenAITTSService(BaseTTSService):
         pitch: float = 0.0,
         emotion_strength: float = 0.7,
         output_path: str = "",
+        voice_instructions: Optional[str] = None,
     ) -> Dict[str, Any]:
         try:
+            # 未指定の場合はデフォルト指示
+            instructions = voice_instructions or (
+                "あなたはVTuberのナレーターです。"
+                "自然で聞き取りやすい日本語で、明るく親しみやすいトーンで話してください。"
+            )
             response = await self.client.audio.speech.create(
-                model="tts-1",
+                model="gpt-4o-mini-tts",
                 voice=voice_id or "nova",
                 input=text,
-                speed=speech_rate,
+                speed=max(0.25, min(4.0, speech_rate)),
+                instructions=instructions,
             )
             if output_path:
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)

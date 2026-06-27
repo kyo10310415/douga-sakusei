@@ -9,14 +9,24 @@ const TTS_VOICE_OPTIONS: Record<string, { label: string; options: { value: strin
     options: [],
   },
   openai: {
-    label: 'OpenAI TTS',
+    label: 'OpenAI TTS (gpt-4o-mini-tts)',
     options: [
-      { value: 'alloy',   label: 'Alloy',   description: '中性的・バランスの良い声' },
-      { value: 'echo',    label: 'Echo',    description: '男性的・落ち着いた声' },
-      { value: 'fable',   label: 'Fable',   description: '英国風・温かみのある声' },
-      { value: 'onyx',    label: 'Onyx',    description: '男性・深みのある低い声' },
-      { value: 'nova',    label: 'Nova',    description: '女性的・明るく活発な声 ★人気' },
+      // ── 女性向き ──────────────────────────────────────
+      { value: 'nova',    label: 'Nova',    description: '女性・明るく活発・配信向き ★人気' },
       { value: 'shimmer', label: 'Shimmer', description: '女性・柔らかく落ち着いた声' },
+      { value: 'coral',   label: 'Coral',   description: '女性・知的で落ち着き ★キャリアウーマン向き' },
+      { value: 'ash',     label: 'Ash',     description: '女性・自信あり・クリア ★キャリアウーマン向き' },
+      { value: 'sage',    label: 'Sage',    description: '女性・穏やか・知的な印象' },
+      { value: 'ballad',  label: 'Ballad',  description: '女性・感情豊か・ドラマチック' },
+      { value: 'marin',   label: 'Marin',   description: '女性・爽やか・若い声' },
+      // ── 男性向き ──────────────────────────────────────
+      { value: 'onyx',    label: 'Onyx',    description: '男性・深みのある低い声' },
+      { value: 'echo',    label: 'Echo',    description: '男性・落ち着いた声' },
+      { value: 'cedar',   label: 'Cedar',   description: '男性・温かみ・親しみやすい' },
+      { value: 'verse',   label: 'Verse',   description: '男性・エネルギッシュ・若い声' },
+      // ── 中性的 ────────────────────────────────────────
+      { value: 'alloy',   label: 'Alloy',   description: '中性的・バランスの良い声' },
+      { value: 'fable',   label: 'Fable',   description: '中性・英国風・温かみのある声' },
     ],
   },
   voicevox: {
@@ -81,6 +91,7 @@ export default function CharactersPage() {
     speech_samples: '',
     tts_provider: 'mock',
     voice_type: '',
+    voice_instructions: '',   // gpt-4o-mini-tts 用スタイル指示
     speech_rate: 1.0,
     pitch: 0.0,
     emotion_strength: 0.7,
@@ -144,6 +155,7 @@ export default function CharactersPage() {
         {
           provider: form.tts_provider,
           voice_type: voiceType || undefined,
+          voice_instructions: form.voice_instructions || undefined,
           speech_rate: form.speech_rate,
           pitch: form.pitch,
           emotion_strength: form.emotion_strength,
@@ -343,6 +355,7 @@ export default function CharactersPage() {
         speech_samples: c.speech_samples || '',
         tts_provider: provider,
         voice_type: isCustom ? '__custom__' : (c.voice_type || voiceOptions[0]?.value || ''),
+        voice_instructions: c.voice_instructions || '',
         speech_rate: c.speech_rate ?? 1.0,
         pitch: c.pitch ?? 0.0,
         emotion_strength: c.emotion_strength ?? 0.7,
@@ -626,6 +639,48 @@ export default function CharactersPage() {
                         </p>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* ── OpenAI: 話し方スタイル指示（gpt-4o-mini-tts専用） ── */}
+                {form.tts_provider === 'openai' && (
+                  <div className="mt-3 bg-blue-50 border border-blue-100 rounded-xl p-3">
+                    <label className="block text-xs font-semibold text-blue-700 mb-1">
+                      🎭 話し方スタイル指示 <span className="font-normal text-blue-500">（gpt-4o-mini-tts 専用・任意）</span>
+                    </label>
+                    <textarea
+                      value={form.voice_instructions}
+                      onChange={e => setForm(prev => ({ ...prev, voice_instructions: e.target.value }))}
+                      rows={3}
+                      maxLength={300}
+                      placeholder={
+                        '例：自信に満ちたキャリアウーマンとして、落ち着いたテンポで力強く話してください。\n' +
+                        '例：明るく元気なVTuberとして、視聴者に語りかけるように話してください。\n' +
+                        '空欄の場合はデフォルト（自然な日本語ナレーター）が使われます。'
+                      }
+                      className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none bg-white resize-none"
+                    />
+                    <p className="text-xs text-gray-400 text-right mt-0.5">{form.voice_instructions.length}/300文字</p>
+                    {/* スタイルサンプルボタン */}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <span className="text-xs text-gray-500 mr-1 self-center">クイック入力：</span>
+                      {[
+                        { label: '👩‍💼 キャリアウーマン', text: '自信に満ちたキャリアウーマンとして、落ち着いたテンポで、しかし力強く話してください。プロフェッショナルで知的な印象を与えてください。' },
+                        { label: '🎉 元気なVTuber', text: '明るく元気なVTuberとして、視聴者に語りかけるように、テンポよく話してください。' },
+                        { label: '🌸 優しいお姉さん', text: '優しく穏やかなお姉さんとして、温かみのあるトーンでゆっくりと話してください。' },
+                        { label: '😎 クールなキャラ', text: 'クールで落ち着いたキャラクターとして、感情をあまり出さず、淡々と話してください。' },
+                        { label: '📚 知識豊富な先生', text: '知識豊富な先生として、わかりやすく丁寧に、しかし親しみやすいトーンで話してください。' },
+                      ].map(sample => (
+                        <button
+                          key={sample.label}
+                          type="button"
+                          onClick={() => setForm(prev => ({ ...prev, voice_instructions: sample.text }))}
+                          className="text-xs bg-white border border-blue-200 text-blue-600 rounded-full px-2.5 py-1 hover:bg-blue-50 transition-colors"
+                        >
+                          {sample.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
 
