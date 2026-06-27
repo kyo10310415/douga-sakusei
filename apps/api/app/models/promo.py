@@ -78,7 +78,10 @@ class CreativeAsset(Base, UUIDMixin, TimestampMixin):
     prompt = Column(Text, nullable=True)
     content = Column(Text, nullable=True)
     file_url = Column(String(500), nullable=True)
-    metadata = Column(JSON, nullable=True)
+    # NOTE: 'metadata' は SQLAlchemy Declarative API の予約語のため
+    #       Pythonアトリビュート名は asset_metadata に変更。
+    #       DBカラム名は "metadata" のまま維持（マイグレーション変更不要）。
+    asset_metadata = Column("metadata", JSON, nullable=True)
 
     post = relationship("Post", back_populates="assets")
 

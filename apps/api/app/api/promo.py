@@ -128,7 +128,7 @@ def _asset_to_dict(a: CreativeAsset) -> dict:
         "prompt": a.prompt,
         "content": a.content,
         "file_url": a.file_url,
-        "metadata": a.metadata,
+        "metadata": a.asset_metadata,  # モデルでは asset_metadata（DBカラム名は "metadata"）
         "created_at": a.created_at.isoformat() if a.created_at else None,
     }
 
