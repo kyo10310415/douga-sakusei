@@ -141,19 +141,52 @@ export default function CharactersPage() {
 
       console.log('[TTS Preview] レスポンス受信', { status: res.status, contentType: res.headers['content-type'] })
 
-      // Blob → ObjectURL → Audio 再生
-      // AxiosResponseHeaders の値型は string|number|boolean|string[] なので String() でキャスト
-      const contentType = String(res.headers['content-type'] || 'audio/mpeg')
-      const blob = new Blob([res.data], { type: contentType })
+      // ── Blob → ObjectURL → Audio 再生 ────────────────────
+      // responseType:'blob' の場合 res.data はすでに Blob オブジェクト。
+      // new Blob([res.data]) と二重ラップすると中身が壊れるため、
+      // res.data をそのまま使い type だけ明示的に上書きする。
+      const rawBlob: Blob = res.data
+      const contentType = String(res.headers['content-type'] || 'audio/mpeg').split(';')[0].trim()
+      const blob = new Blob([rawBlob], { type: contentType })
+      // ※ Blob を Blob でラップしても実データは保持される（配列要素が Blob の場合 Blob API が正しく処理する）
+      //   ただし type を確実に上書きしたいため再生成している
+
+      console.log('[TTS Preview] Blob情報', {
+        rawSize: rawBlob.size,
+        rawType: rawBlob.type,
+        blobSize: blob.size,
+        blobType: blob.type,
+      })
+
+      if (blob.size === 0) {
+        setPreviewError('音声データが空です。APIキーや設定を確認してください。')
+        return
+      }
+
       const url = URL.createObjectURL(blob)
       const audio = new Audio(url)
       audioRef.current = audio
 
       audio.onended = () => { setIsPlaying(false); URL.revokeObjectURL(url) }
-      audio.onerror = () => { setIsPlaying(false); setPreviewError('再生中にエラーが発生しました') }
+      audio.onerror = (e) => {
+        console.error('[TTS Preview] audio.onerror', e)
+        setIsPlaying(false)
+        setPreviewError('再生中にエラーが発生しました（ブラウザがこの音声形式に対応していない可能性があります）')
+        URL.revokeObjectURL(url)
+      }
 
-      await audio.play()
-      setIsPlaying(true)
+      try {
+        await audio.play()
+        setIsPlaying(true)
+      } catch (playErr: any) {
+        console.error('[TTS Preview] audio.play() 失敗', playErr)
+        if (playErr?.name === 'NotAllowedError') {
+          setPreviewError('ブラウザのAutoplay制限により再生できません。画面をクリックしてから再度お試しください。')
+        } else {
+          setPreviewError(`再生に失敗しました: ${playErr?.message || playErr}`)
+        }
+        URL.revokeObjectURL(url)
+      }
     } catch (err: any) {
       // デバッグ: ステータス・URL・レスポンス内容をコンソールに出力
       const status = err.response?.status
