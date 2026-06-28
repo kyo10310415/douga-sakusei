@@ -357,6 +357,8 @@ class OpenAIService(BaseAIService):
 ・文体は話し言葉（「〜だよ！」「〜だよね？」「〜なんだけど」など）
 ・禁止表現: {json.dumps(character.get('ng_expressions', []), ensure_ascii=False)}
 ・本編（main）セクションは特に充実させ、1トピックにつき最低200字以上かける
+・「〜だよ！」「〜だよね？」などの話し言葉のあと、必ず「具体的には…」「たとえば…」「実際に{character.get('first_person','私')}がやってみたら…」で内容を展開する
+・各トピックに「①手順の説明」「②具体例・数字」「③視聴者へのメリット強調」の3要素を入れる
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ■ 出力JSONの構造
@@ -401,7 +403,7 @@ class OpenAIService(BaseAIService):
         # ─────────────────────────────────────────────────────────
         sections_out = result.get("sections", [])
         narration_total = sum(len(s.get("narration", "")) for s in sections_out)
-        min_acceptable = int(total_sec * CHARS_PER_SEC * 0.6)  # 期待値の60%
+        min_acceptable = int(total_sec * CHARS_PER_SEC * 0.8)  # 期待値の80%（81%未満でfallback発動）
 
         if narration_total < min_acceptable and sections_out:
             # 短すぎるセクションを特定して再生成プロンプトを作る
@@ -410,7 +412,7 @@ class OpenAIService(BaseAIService):
                 dur = s.get("duration_seconds", 60)
                 expected = int(dur * CHARS_PER_SEC * SAFETY_MARGIN)
                 actual = len(s.get("narration", ""))
-                if actual < int(expected * 0.6):
+                if actual < int(expected * 0.75):  # セクション単位は75%未満で再生成対象
                     short_sections.append({
                         "section_type": s.get("section_type"),
                         "title": s.get("title"),
