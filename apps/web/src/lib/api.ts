@@ -107,6 +107,13 @@ export const videoJobApi = {
   get: (id: string) => apiClient.get(`/video-jobs/${id}`),
   retry: (id: string) => apiClient.post(`/video-jobs/${id}/retry`),
   cancel: (id: string) => apiClient.post(`/video-jobs/${id}/cancel`),
+  // 同期生成（企画→台本を一括生成して即返す）
+  generate: (data: { character_id: string; theme_id: string; custom_topic?: string }) =>
+    apiClient.post('/video-jobs/generate', data),
+  listPlans: (limit = 20) =>
+    apiClient.get('/video-jobs/plans', { params: { limit } }),
+  getPlan: (planId: string) =>
+    apiClient.get(`/video-jobs/plans/${planId}`),
 }
 
 // Review API

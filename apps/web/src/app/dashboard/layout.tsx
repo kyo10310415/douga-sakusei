@@ -6,8 +6,9 @@ import { useAuth } from '@/hooks/useAuth'
 
 const navItems = [
   { href: '/dashboard', label: 'ダッシュボード', icon: '📊' },
+  { href: '/dashboard/generate', label: '動画生成', icon: '✨' },
   { href: '/dashboard/weekly', label: '週次データ', icon: '📅' },
-  { href: '/dashboard/jobs', label: '動画生成ジョブ', icon: '🎬' },
+  { href: '/dashboard/jobs', label: '生成ジョブ', icon: '🎬' },
   { href: '/dashboard/characters', label: 'キャラクター設定', icon: '🎭' },
   { href: '/dashboard/themes', label: '動画テーマ設定', icon: '🎯' },
   { href: '/dashboard/analysis', label: 'AI分析', icon: '🤖' },

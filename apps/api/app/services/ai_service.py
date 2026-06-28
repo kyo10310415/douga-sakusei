@@ -287,7 +287,9 @@ NG表現は絶対に使用しないでください。
 
 
 def get_ai_service() -> BaseAIService:
-    """環境設定に基づいてAIサービスを返す"""
-    if settings.OPENAI_API_KEY and settings.APP_ENV == "production":
+    """環境設定に基づいてAIサービスを返す
+    OPENAI_API_KEY が設定されていれば本番モード（APP_ENV に関係なく）
+    """
+    if settings.OPENAI_API_KEY:
         return OpenAIService()
     return MockAIService()
