@@ -99,6 +99,17 @@ async def generate_script_sync(
         "plan": plan_result,
     })
 
+    # ── full_script フォールバック ──
+    # GPT が full_script を短く返した場合、sections の narration を連結して補完する
+    sections_raw = script_result.get("sections", [])
+    generated_full = script_result.get("full_script", "")
+    if len(generated_full) < 200 and sections_raw:
+        generated_full = "\n\n".join(
+            f"【{s.get('title', s.get('section_type', ''))}】\n{s.get('narration', '')}"
+            for s in sections_raw
+            if s.get("narration")
+        )
+
     # ── DB 保存 (VideoPlan + Script + ScriptSection) ──
     video_plan = VideoPlan(
         character_id=character.id,
@@ -121,7 +132,7 @@ async def generate_script_sync(
         video_plan_id=video_plan.id,
         character_id=character.id,
         hook_text=script_result.get("hook_text"),
-        full_script=script_result.get("full_script"),
+        full_script=generated_full,
         subtitle_text=script_result.get("subtitle_text"),
         asset_list=script_result.get("asset_list"),
         status="completed",

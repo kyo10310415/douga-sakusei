@@ -222,30 +222,48 @@ class OpenAIService(BaseAIService):
         theme = data.get("theme", {})
         analysis = data.get("analysis", {})
 
-        prompt = f"""
-あなたはYouTube動画プランナーです。
-以下の情報をもとに、10分動画の企画をJSON形式で作成してください。
+        duration = theme.get("default_duration_seconds", 600)
+        custom_topic = theme.get("custom_topic", "")
 
-キャラクター情報:
+        prompt = f"""あなたはYouTubeチャンネルのトッププランナーです。
+以下の情報をもとに、視聴維持率・CTRが高い動画の企画をJSON形式で作成してください。
+
+━━━━━━━━━━━━━━━━━━━━━
+■ キャラクター情報
+━━━━━━━━━━━━━━━━━━━━━
 {json.dumps(character, ensure_ascii=False, indent=2)}
 
-テーマ設定:
+━━━━━━━━━━━━━━━━━━━━━
+■ チャンネルテーマ設定
+━━━━━━━━━━━━━━━━━━━━━
 {json.dumps(theme, ensure_ascii=False, indent=2)}
+{"■ 今回の指定トピック: " + custom_topic if custom_topic else ""}
 
-AI分析結果:
-{json.dumps(analysis, ensure_ascii=False, indent=2)}
+━━━━━━━━━━━━━━━━━━━━━
+■ 出力するJSONの構造（必須キー）
+━━━━━━━━━━━━━━━━━━━━━
+{{
+  "title": "企画タイトル（視聴者が興味を持つ魅力的なもの）",
+  "goal": "動画の目的・達成したいこと",
+  "target_audience": "想定視聴者の詳細プロフィール",
+  "total_duration_seconds": {duration},
+  "structure": [
+    {{
+      "section": "hook|problem|main|example|summary|cta",
+      "title": "セクション名",
+      "seconds": 秒数（整数）,
+      "description": "このセクションで話す内容の詳細説明（台本ライターへの指示として具体的に書く。100字以上）"
+    }}
+  ],
+  "youtube_title_candidates": ["タイトル案1", "タイトル案2", "タイトル案3", "タイトル案4", "タイトル案5"],
+  "youtube_description": "概要欄テキスト（チャプター・リンク・ハッシュタグ含む）",
+  "youtube_tags": ["タグ1", "タグ2", ...],
+  "cta": "動画末尾のCTAテキスト"
+}}
 
-以下のキーを含むJSONを返してください:
-- title: 企画タイトル
-- goal: 動画の狙い
-- target_audience: ターゲット・想定視聴者
-- total_duration_seconds: 合計秒数（600程度）
-- structure: セクション配列（各要素: section, title, seconds, description）
-- youtube_title_candidates: タイトル案5つ（配列）
-- youtube_description: 概要欄テキスト
-- youtube_tags: タグ配列
-- cta: CTAテキスト
-"""
+■ structure の合計 seconds は {duration} 秒（{duration//60}分）に合わせること。
+■ description は台本ライターへの詳細な指示として書くこと（「〇〇について話す」ではなく「〇〇を△△の観点から説明し、具体例として□□を挙げる」レベルで）。"""
+
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -257,30 +275,83 @@ AI分析結果:
         character = data.get("character", {})
         plan = data.get("plan", {})
 
-        prompt = f"""
-あなたは女性VTuberの台本ライターです。
-以下の情報をもとに、セクションごとの台本をJSON形式で作成してください。
+        # 動画尺から各セクションの目安文字数を計算（日本語は約300字/分）
+        total_sec = plan.get("total_duration_seconds", 600)
+        chars_per_sec = 5  # 約300字/分 = 5字/秒
 
-キャラクター設定:
+        # structure から各セクションの秒数を取り出す
+        structure = plan.get("structure", [])
+        section_guide = ""
+        for s in structure:
+            sec = s.get("seconds", 60)
+            approx_chars = sec * chars_per_sec
+            section_guide += (
+                f"  - {s.get('title', '')}（{s.get('section', '')}）: "
+                f"{sec}秒 → narration は約{approx_chars}文字\n"
+            )
+
+        prompt = f"""あなたはプロのVTuber台本ライターです。
+以下のキャラクター設定・動画企画をもとに、視聴者を引きつける本格的な台本をJSON形式で作成してください。
+
+━━━━━━━━━━━━━━━━━━━━━
+■ キャラクター設定
+━━━━━━━━━━━━━━━━━━━━━
 {json.dumps(character, ensure_ascii=False, indent=2)}
 
-企画:
+━━━━━━━━━━━━━━━━━━━━━
+■ 動画企画
+━━━━━━━━━━━━━━━━━━━━━
 {json.dumps(plan, ensure_ascii=False, indent=2)}
 
-以下のキーを含むJSONを返してください:
-- hook_text: 冒頭15秒のフックテキスト
-- full_script: 全体台本テキスト
-- sections: セクション配列（各要素: section_type, title, duration_seconds, narration, subtitle, direction, expression）
-  - expressionは normal/smile/surprise/troubled/serious のいずれか
-- subtitle_text: 字幕テキスト全体
-- asset_list: 必要な素材リスト（各要素: type, description）
+━━━━━━━━━━━━━━━━━━━━━
+■ 絶対に守るルール
+━━━━━━━━━━━━━━━━━━━━━
+1. 各セクションの narration は「実際に読み上げる台本テキスト」を丸ごと書く。要約・箇条書き・説明文は禁止。
+2. 各セクションの文字数は以下の目安を必ず守ること（少なすぎる narration は不合格）:
+{section_guide}
+3. キャラクターの口調・一人称（{character.get('first_person','私')}）・視聴者の呼び方（{character.get('viewer_address','みなさん')}）を全セクションで統一する。
+4. NG表現（{json.dumps(character.get('ng_expressions', []), ensure_ascii=False)}）は絶対に使用しない。
+5. 冒頭フック（hook）は視聴者が「続きを見たい！」と思う強いインパクトで始める。
+6. 本編セクション（main）は具体的な情報・例・数字を盛り込み、薄い内容にしない。
+7. full_script は全セクションの narration を改行でつないだ完全な台本テキストにする。
 
-キャラクターの設定を厳守し、口調・一人称・視聴者の呼び方を統一してください。
-NG表現は絶対に使用しないでください。
-"""
+━━━━━━━━━━━━━━━━━━━━━
+■ 出力するJSONの構造
+━━━━━━━━━━━━━━━━━━━━━
+{{
+  "hook_text": "冒頭15秒の強烈なフックテキスト（narration と同じ内容）",
+  "full_script": "全セクションの narration を連結した完全台本テキスト",
+  "subtitle_text": "全セクションの subtitle を連結したテキスト",
+  "asset_list": [{{"type": "background|insert_image|bgm", "description": "説明"}}],
+  "sections": [
+    {{
+      "section_type": "hook|problem|main|example|summary|cta",
+      "title": "セクション名",
+      "duration_seconds": 秒数（整数）,
+      "narration": "このセクションで実際に読み上げる台本テキスト全文（上記文字数目安を守ること）",
+      "subtitle": "画面に表示する字幕テキスト（30字以内）",
+      "direction": "カメラ・演出・挿入画像などの指示",
+      "expression": "normal|smile|surprise|troubled|serious"
+    }}
+  ]
+}}
+
+必ずすべてのセクションを含め、narration は十分な長さで書くこと。"""
+
         response = await self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "あなたはプロのVTuber台本ライターです。"
+                        "指定された文字数・キャラクター設定を厳守し、"
+                        "視聴者を飽きさせない本格的な台本を書きます。"
+                        "narration が短すぎる台本は品質不合格として、必ず十分な長さで書いてください。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
             response_format={"type": "json_object"},
         )
         return json.loads(response.choices[0].message.content)
