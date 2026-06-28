@@ -19,7 +19,9 @@ router = APIRouter(prefix="/video-jobs", tags=["VideoJobs"])
 
 
 # ─────────────────────────────────────────────
-# 同期実行: 企画 → 台本を一気に生成して即返す
+# 2ステップ生成: Step1=企画のみ, Step2=台本のみ
+# 各ステップを独立したHTTPリクエストに分割して
+# Render 30秒タイムアウトを回避する
 # ─────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -28,6 +30,262 @@ class GenerateRequest(BaseModel):
     custom_topic: Optional[str] = None  # 任意: テーマに追加指示
 
 
+class GenerateScriptRequest(BaseModel):
+    plan_id: str  # Step1で返された plan_id
+
+
+def _build_character_dict(character: CharacterProfile) -> dict:
+    """CharacterProfile → AI入力用 dict"""
+    return {
+        "name": character.name,
+        "age_setting": character.age_setting,
+        "personality": character.personality,
+        "tone": character.tone,
+        "first_person": character.first_person,
+        "viewer_address": character.viewer_address,
+        "speech_samples": character.speech_samples,
+        "ng_expressions": character.ng_expressions,
+    }
+
+
+def _build_theme_dict(theme: VideoThemeSetting, custom_topic: Optional[str] = None) -> dict:
+    """VideoThemeSetting → AI入力用 dict"""
+    d = {
+        "main_channel_theme": theme.main_channel_theme,
+        "target_audience": theme.target_audience,
+        "purposes": theme.purposes,
+        "title_policy": theme.title_policy,
+        "thumbnail_policy": theme.thumbnail_policy,
+        "default_duration_seconds": theme.default_duration_seconds,
+    }
+    if custom_topic:
+        d["custom_topic"] = custom_topic
+    return d
+
+
+# ── Step 1: 企画のみ生成 (~10-15秒) ──
+
+@router.post("/generate/plan")
+async def generate_plan_only(
+    data: GenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    【Step 1/2】 動画企画のみを生成してDBに保存し、plan_idを返す。
+    所要時間: Mock ~0.1秒 / GPT-4o ~10-15秒
+    次に POST /generate/script を呼び出して台本を生成する。
+    """
+    # ── キャラクター取得 ──
+    character = db.query(CharacterProfile).filter(
+        CharacterProfile.id == data.character_id,
+        CharacterProfile.user_id == current_user.id,
+        CharacterProfile.is_active == True,
+    ).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラクターが見つかりません")
+
+    # ── テーマ取得 ──
+    theme = db.query(VideoThemeSetting).filter(
+        VideoThemeSetting.id == data.theme_id,
+        VideoThemeSetting.user_id == current_user.id,
+        VideoThemeSetting.is_active == True,
+    ).first()
+    if not theme:
+        raise HTTPException(status_code=404, detail="テーマが見つかりません")
+
+    ai_service = get_ai_service()
+    is_mock = type(ai_service).__name__ == "MockAIService"
+
+    plan_result = await ai_service.generate_video_plan({
+        "character": _build_character_dict(character),
+        "theme": _build_theme_dict(theme, data.custom_topic),
+        "analysis": {},
+    })
+
+    # DB保存
+    video_plan = VideoPlan(
+        character_id=character.id,
+        theme_id=theme.id,
+        title=plan_result.get("title", "未タイトル"),
+        goal=plan_result.get("goal"),
+        target_audience=plan_result.get("target_audience"),
+        total_duration_seconds=plan_result.get("total_duration_seconds", 600),
+        structure=plan_result.get("structure"),
+        youtube_title_candidates=plan_result.get("youtube_title_candidates"),
+        youtube_description=plan_result.get("youtube_description"),
+        youtube_tags=plan_result.get("youtube_tags"),
+        cta=plan_result.get("cta"),
+        status="draft",
+    )
+    db.add(video_plan)
+    db.commit()
+    db.refresh(video_plan)
+
+    return {
+        "ai_mode": "mock" if is_mock else "openai",
+        "plan_id": str(video_plan.id),
+        "video_plan": {
+            "id": str(video_plan.id),
+            "title": video_plan.title,
+            "goal": video_plan.goal,
+            "target_audience": video_plan.target_audience,
+            "total_duration_seconds": video_plan.total_duration_seconds,
+            "structure": video_plan.structure,
+            "youtube_title_candidates": video_plan.youtube_title_candidates,
+            "youtube_description": video_plan.youtube_description,
+            "youtube_tags": video_plan.youtube_tags,
+            "cta": video_plan.cta,
+        },
+        "character": {"id": str(character.id), "name": character.name},
+        "theme": {"id": str(theme.id), "name": theme.name},
+    }
+
+
+# ── Step 2: 台本のみ生成 (~20-30秒) ──
+
+@router.post("/generate/script")
+async def generate_script_from_plan(
+    data: GenerateScriptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    【Step 2/2】 Step1で生成した plan_id をもとに台本を生成してDBに保存する。
+    所要時間: Mock ~0.1秒 / GPT-4o ~20-30秒
+    """
+    # plan取得（所有権チェック）
+    plan = (
+        db.query(VideoPlan)
+        .join(CharacterProfile, VideoPlan.character_id == CharacterProfile.id)
+        .filter(
+            VideoPlan.id == data.plan_id,
+            CharacterProfile.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not plan:
+        raise HTTPException(status_code=404, detail="企画が見つかりません")
+
+    # 既に台本がある場合はそれを返す
+    if plan.script:
+        s = plan.script
+        return {
+            "ai_mode": "cached",
+            "script": {
+                "id": str(s.id),
+                "hook_text": s.hook_text,
+                "full_script": s.full_script,
+                "subtitle_text": s.subtitle_text,
+                "asset_list": s.asset_list,
+                "sections": [
+                    {
+                        "order_index": sec.order_index,
+                        "section_type": sec.section_type,
+                        "title": sec.title,
+                        "duration_seconds": sec.duration_seconds,
+                        "narration": sec.narration,
+                        "subtitle": sec.subtitle,
+                        "direction": sec.direction,
+                        "expression": sec.expression,
+                    }
+                    for sec in sorted(s.sections, key=lambda x: x.order_index)
+                ],
+            },
+        }
+
+    character = db.query(CharacterProfile).filter(
+        CharacterProfile.id == plan.character_id
+    ).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="キャラクターが見つかりません")
+
+    ai_service = get_ai_service()
+    is_mock = type(ai_service).__name__ == "MockAIService"
+
+    plan_dict = {
+        "title": plan.title,
+        "goal": plan.goal,
+        "target_audience": plan.target_audience,
+        "total_duration_seconds": plan.total_duration_seconds,
+        "structure": plan.structure,
+        "cta": plan.cta,
+    }
+
+    script_result = await ai_service.generate_script({
+        "character": _build_character_dict(character),
+        "plan": plan_dict,
+    })
+
+    # full_script フォールバック
+    total_sec = plan.total_duration_seconds or 600
+    min_acceptable_chars = int(total_sec * 6.5 * 0.5)
+    sections_raw = script_result.get("sections", [])
+    generated_full = script_result.get("full_script", "")
+    if len(generated_full) < min_acceptable_chars and sections_raw:
+        generated_full = "\n\n".join(
+            f"【{s.get('title', s.get('section_type', ''))}】\n{s.get('narration', '')}"
+            for s in sections_raw
+            if s.get("narration")
+        )
+
+    # DB保存
+    script = Script(
+        video_plan_id=plan.id,
+        character_id=character.id,
+        hook_text=script_result.get("hook_text"),
+        full_script=generated_full,
+        subtitle_text=script_result.get("subtitle_text"),
+        asset_list=script_result.get("asset_list"),
+        status="completed",
+    )
+    db.add(script)
+    db.flush()
+
+    for i, sec in enumerate(script_result.get("sections", [])):
+        section = ScriptSection(
+            script_id=script.id,
+            order_index=i,
+            section_type=sec.get("section_type", "main"),
+            title=sec.get("title"),
+            duration_seconds=sec.get("duration_seconds", 60),
+            narration=sec.get("narration"),
+            subtitle=sec.get("subtitle"),
+            direction=sec.get("direction"),
+            expression=sec.get("expression", "normal"),
+        )
+        db.add(section)
+
+    db.commit()
+    db.refresh(script)
+
+    return {
+        "ai_mode": "mock" if is_mock else "openai",
+        "script": {
+            "id": str(script.id),
+            "hook_text": script.hook_text,
+            "full_script": script.full_script,
+            "subtitle_text": script.subtitle_text,
+            "asset_list": script.asset_list,
+            "sections": [
+                {
+                    "order_index": sec.order_index,
+                    "section_type": sec.section_type,
+                    "title": sec.title,
+                    "duration_seconds": sec.duration_seconds,
+                    "narration": sec.narration,
+                    "subtitle": sec.subtitle,
+                    "direction": sec.direction,
+                    "expression": sec.expression,
+                }
+                for sec in sorted(script.sections, key=lambda x: x.order_index)
+            ],
+        },
+    }
+
+
+# ── 後方互換: 旧エンドポイント（内部で2ステップに委譲） ──
+
 @router.post("/generate")
 async def generate_script_sync(
     data: GenerateRequest,
@@ -35,9 +293,9 @@ async def generate_script_sync(
     current_user: User = Depends(get_current_user),
 ):
     """
-    同期モードで「企画生成 → 台本生成」を実行し結果をその場で返す。
-    Celery / Redis 不要。OpenAI キーがあれば GPT-4o を使用、なければ Mock。
-    所要時間: Mock ~0.1秒 / GPT-4o ~20-40秒
+    【後方互換】企画→台本を一括生成。
+    ※ 新しいコードは /generate/plan → /generate/script を使うこと。
+    所要時間: Mock ~0.1秒 / GPT-4o ~20-40秒（タイムアウトリスクあり）
     """
     # ── キャラクター取得 ──
     character = db.query(CharacterProfile).filter(

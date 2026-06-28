@@ -4,7 +4,16 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 export const apiClient = axios.create({
   baseURL: `${API_BASE_URL}/api`,
-  timeout: 30000,
+  timeout: 60000,  // 60秒: GPT-4o 台本生成は最大60秒かかる場合がある
+  headers: {
+    'Content-Type': 'application/json',
+  },
+})
+
+// 長時間リクエスト用クライアント（AI生成など120秒まで待機）
+export const apiClientLong = axios.create({
+  baseURL: `${API_BASE_URL}/api`,
+  timeout: 120000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -21,18 +30,36 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
+// 長時間クライアントにも同じインターセプターを適用
+apiClientLong.interceptors.request.use((config) => {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('access_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+  }
+  return config
+})
+
 // レスポンスインターセプター（認証エラー処理）
+const authErrorInterceptor = (error: any) => {
+  if (error.response?.status === 401) {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('access_token')
+      window.location.href = '/login'
+    }
+  }
+  return Promise.reject(error)
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('access_token')
-        window.location.href = '/login'
-      }
-    }
-    return Promise.reject(error)
-  }
+  authErrorInterceptor,
+)
+
+apiClientLong.interceptors.response.use(
+  (response) => response,
+  authErrorInterceptor,
 )
 
 // Auth API
@@ -107,9 +134,19 @@ export const videoJobApi = {
   get: (id: string) => apiClient.get(`/video-jobs/${id}`),
   retry: (id: string) => apiClient.post(`/video-jobs/${id}/retry`),
   cancel: (id: string) => apiClient.post(`/video-jobs/${id}/cancel`),
-  // 同期生成（企画→台本を一括生成して即返す）
+
+  // ── 2ステップ生成（Render 30秒タイムアウト対策）──
+  // Step1: 企画のみ生成 (~10-15秒) → plan_id を返す
+  generatePlan: (data: { character_id: string; theme_id: string; custom_topic?: string }) =>
+    apiClientLong.post('/video-jobs/generate/plan', data),
+  // Step2: plan_id をもとに台本生成 (~20-30秒) → script を返す
+  generateScript: (data: { plan_id: string }) =>
+    apiClientLong.post('/video-jobs/generate/script', data),
+
+  // 後方互換（旧一括生成エンドポイント）
   generate: (data: { character_id: string; theme_id: string; custom_topic?: string }) =>
-    apiClient.post('/video-jobs/generate', data),
+    apiClientLong.post('/video-jobs/generate', data),
+
   listPlans: (limit = 20) =>
     apiClient.get('/video-jobs/plans', { params: { limit } }),
   getPlan: (planId: string) =>
