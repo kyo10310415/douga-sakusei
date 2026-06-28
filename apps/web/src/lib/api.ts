@@ -147,6 +147,18 @@ export const videoJobApi = {
   generate: (data: { character_id: string; theme_id: string; custom_topic?: string }) =>
     apiClientLong.post('/video-jobs/generate', data),
 
+  // Step3: 台本の各セクションを OpenAI TTS で音声生成 (~15-60秒)
+  generateVoice: (data: { script_id: string }) =>
+    apiClientLong.post('/video-jobs/generate/voice', data),
+
+  // Step4: FFmpeg動画合成＋YouTubeアップロードを Celery でキック（即時レスポンス）
+  generateVideo: (data: { script_id: string }) =>
+    apiClientLong.post('/video-jobs/generate/video', data),
+
+  // Step4 進捗ポーリング: render_job_id の状態・進捗・YouTube URL を返す
+  getRenderStatus: (renderJobId: string) =>
+    apiClient.get(`/video-jobs/render/${renderJobId}`),
+
   listPlans: (limit = 20) =>
     apiClient.get('/video-jobs/plans', { params: { limit } }),
   getPlan: (planId: string) =>

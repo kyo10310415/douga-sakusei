@@ -5,10 +5,12 @@ from pydantic import BaseModel
 from datetime import datetime
 import asyncio
 import logging
+import os
 import traceback
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.config import settings
 from app.models.user import User
 from app.models.video import RenderJob, VideoPlan, Script, ScriptSection, GeneratedVoice, GeneratedAsset, GeneratedVideo
 from app.models.upload import YouTubeUpload, ReviewChecklist, Approval
@@ -340,7 +342,308 @@ async def generate_script_from_plan(
     }
 
 
+# ── Step 3: 音声生成 (~15-60秒、セクション数×TTS時間) ──
+
+class GenerateVoiceRequest(BaseModel):
+    script_id: str   # Step2で返された script_id
+
+
+@router.post("/generate/voice")
+async def generate_voice_from_script(
+    data: GenerateVoiceRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    【Step 3/4】 台本の各セクションを OpenAI TTS で音声生成し R2/ローカルに保存。
+    所要時間: セクション数 × 約5-10秒
+    """
+    try:
+        # script 取得（所有権チェック）
+        script = (
+            db.query(Script)
+            .join(VideoPlan, Script.video_plan_id == VideoPlan.id)
+            .join(CharacterProfile, VideoPlan.character_id == CharacterProfile.id)
+            .filter(
+                Script.id == data.script_id,
+                CharacterProfile.user_id == current_user.id,
+            )
+            .first()
+        )
+        if not script:
+            raise HTTPException(status_code=404, detail="台本が見つかりません")
+
+        character = db.query(CharacterProfile).filter(
+            CharacterProfile.id == script.character_id
+        ).first()
+
+        sections = sorted(script.sections, key=lambda x: x.order_index)
+
+        from app.services.tts_service import get_tts_service
+        from app.services.storage_service import storage_service
+
+        tts_service = get_tts_service()
+        is_mock = type(tts_service).__name__ == "MockTTSService"
+
+        generated_voices = []
+        total_duration = 0.0
+
+        for i, section in enumerate(sections):
+            if not section.narration:
+                generated_voices.append({
+                    "section_id": str(section.id),
+                    "order_index": section.order_index,
+                    "section_type": section.section_type,
+                    "status": "skipped",
+                    "file_url": None,
+                    "duration_seconds": 0,
+                })
+                continue
+
+            # 既存の音声があればスキップ
+            existing = db.query(GeneratedVoice).filter(
+                GeneratedVoice.section_id == section.id,
+                GeneratedVoice.status == "completed",
+            ).first()
+            if existing:
+                generated_voices.append({
+                    "section_id": str(section.id),
+                    "order_index": section.order_index,
+                    "section_type": section.section_type,
+                    "status": "cached",
+                    "file_url": existing.file_url,
+                    "duration_seconds": existing.duration_seconds or 0,
+                })
+                total_duration += existing.duration_seconds or 0
+                continue
+
+            # 一時ファイルパス
+            remote_key = f"voices/{data.script_id}/section_{i:03d}.mp3"
+            tmp_path = storage_service.get_local_tmp_path(remote_key)
+
+            # TTS 生成
+            result = await tts_service.generate_voice(
+                text=section.narration,
+                voice_id=character.voice_type if character else "nova",
+                speech_rate=character.speech_rate if character else 1.0,
+                pitch=character.pitch if character else 0.0,
+                emotion_strength=character.emotion_strength if character else 0.7,
+                output_path=tmp_path,
+                **({"voice_instructions": character.voice_instructions}
+                   if character and character.voice_instructions else {}),
+            )
+
+            file_url = None
+            if result.get("success") and os.path.exists(tmp_path):
+                # R2/S3 にアップロード
+                file_url = await storage_service.upload_file(
+                    local_path=tmp_path,
+                    remote_key=remote_key,
+                    content_type="audio/mpeg",
+                )
+                # R2使用時は一時ファイルを削除
+                if settings.STORAGE_PROVIDER != "local":
+                    storage_service.delete_local_tmp(tmp_path)
+
+            # DB 保存
+            voice = GeneratedVoice(
+                section_id=section.id,
+                character_id=script.character_id,
+                text=section.narration,
+                tts_provider=result.get("provider", "mock"),
+                voice_id=character.voice_type if character else None,
+                speech_rate=character.speech_rate if character else 1.0,
+                pitch=character.pitch if character else 0.0,
+                emotion_strength=character.emotion_strength if character else 0.7,
+                file_path=tmp_path if settings.STORAGE_PROVIDER == "local" else None,
+                file_url=file_url,
+                duration_seconds=result.get("duration_seconds"),
+                status="completed" if result.get("success") else "failed",
+                error_message=result.get("error"),
+                generated_at=datetime.utcnow(),
+            )
+            db.add(voice)
+            db.flush()
+
+            dur = result.get("duration_seconds") or 0
+            total_duration += dur
+            generated_voices.append({
+                "section_id": str(section.id),
+                "order_index": section.order_index,
+                "section_type": section.section_type,
+                "status": "completed" if result.get("success") else "failed",
+                "file_url": file_url,
+                "duration_seconds": dur,
+                "error": result.get("error"),
+            })
+
+        db.commit()
+
+        return {
+            "ai_mode": "mock" if is_mock else "openai",
+            "script_id": data.script_id,
+            "total_duration_seconds": total_duration,
+            "voice_count": len([v for v in generated_voices if v["status"] == "completed"]),
+            "voices": generated_voices,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"[generate/voice] 500 error: {e}\n{tb}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"音声生成中にエラーが発生しました: {type(e).__name__}: {str(e)}"
+        )
+
+
+# ── Step 4: 動画生成（Celery Background Job として非同期実行）──
+
+class GenerateVideoRequest(BaseModel):
+    script_id: str   # Step2で返された script_id
+
+
+@router.post("/generate/video")
+async def generate_video_from_script(
+    data: GenerateVideoRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    【Step 4/4】 音声＋キャラクター画像を FFmpeg で合成して動画生成し、
+    YouTubeに非公開アップロードするジョブを Celery でキックする。
+    即時レスポンスで render_job_id を返す（実際の処理はバックグラウンド）。
+    進捗は GET /video-jobs/render/{render_job_id} でポーリング。
+    """
+    try:
+        # script 取得（所有権チェック）
+        script = (
+            db.query(Script)
+            .join(VideoPlan, Script.video_plan_id == VideoPlan.id)
+            .join(CharacterProfile, VideoPlan.character_id == CharacterProfile.id)
+            .filter(
+                Script.id == data.script_id,
+                CharacterProfile.user_id == current_user.id,
+            )
+            .first()
+        )
+        if not script:
+            raise HTTPException(status_code=404, detail="台本が見つかりません")
+
+        # 音声が生成済みか確認
+        voices = db.query(GeneratedVoice).filter(
+            GeneratedVoice.section_id.in_(
+                [s.id for s in script.sections]
+            ),
+            GeneratedVoice.status == "completed",
+        ).count()
+        if voices == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="音声が未生成です。先に /generate/voice を実行してください。"
+            )
+
+        # 既存の RenderJob があれば返す（重複起動防止）
+        existing_job = db.query(RenderJob).filter(
+            RenderJob.video_plan_id == script.video_plan_id,
+            RenderJob.status.notin_(["failed"]),
+        ).first()
+        if existing_job:
+            return {
+                "render_job_id": str(existing_job.id),
+                "status": existing_job.status,
+                "message": "既存のレンダリングジョブが進行中または完了済みです。",
+                "progress_percent": existing_job.progress_percent,
+            }
+
+        # RenderJob 作成
+        render_job = RenderJob(
+            video_plan_id=script.video_plan_id,
+            status="pending",
+            progress_percent=0,
+            current_step="動画生成ジョブをキュー投入中",
+        )
+        db.add(render_job)
+        db.commit()
+        db.refresh(render_job)
+
+        # Celery ジョブをキック
+        from app.jobs.video_jobs import generate_assets
+        generate_assets.apply_async(
+            kwargs={
+                "render_job_id": str(render_job.id),
+                "script_id": str(script.id),
+            },
+            queue="video",
+        )
+
+        return {
+            "render_job_id": str(render_job.id),
+            "status": "pending",
+            "message": "動画生成ジョブを開始しました。進捗は /generate/render/{render_job_id} で確認できます。",
+            "progress_percent": 0,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"[generate/video] 500 error: {e}\n{tb}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"動画生成ジョブの投入に失敗しました: {type(e).__name__}: {str(e)}"
+        )
+
+
+# ── レンダリング進捗確認 ──
+
+@router.get("/render/{render_job_id}")
+def get_render_status(
+    render_job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    動画レンダリングジョブの進捗を返す。
+    フロントエンドが 3秒ごとにポーリングして進捗バーを更新する。
+    """
+    job = db.query(RenderJob).filter(RenderJob.id == render_job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="レンダリングジョブが見つかりません")
+
+    # 完了時は YouTube アップロード情報も返す
+    yt_upload_data = None
+    if job.status in ("uploading", "waiting_review", "approved", "published"):
+        from app.models.upload import YouTubeUpload
+        yt = db.query(YouTubeUpload).filter(
+            YouTubeUpload.generated_video_id == (
+                job.generated_video.id if job.generated_video else None
+            )
+        ).first()
+        if yt:
+            yt_upload_data = {
+                "youtube_video_id": yt.youtube_video_id,
+                "youtube_url": yt.youtube_url,
+                "privacy_status": yt.privacy_status,
+                "upload_status": yt.upload_status,
+            }
+
+    return {
+        "render_job_id": render_job_id,
+        "status": job.status,
+        "progress_percent": job.progress_percent,
+        "current_step": job.current_step,
+        "error_message": job.error_message,
+        "output_file_url": job.output_file_url,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "youtube_upload": yt_upload_data,
+    }
+
+
 # ── 後方互換: 旧エンドポイント（内部で2ステップに委譲） ──
+
 
 @router.post("/generate")
 async def generate_script_sync(
