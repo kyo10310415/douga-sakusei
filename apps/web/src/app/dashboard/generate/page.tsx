@@ -467,7 +467,30 @@ export default function GeneratePage() {
 
               {/* 台本カード */}
               <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-                <h2 className="text-lg font-bold text-gray-900 mb-2">📝 台本</h2>
+                <div className="flex items-start justify-between mb-2 flex-wrap gap-2">
+                  <h2 className="text-lg font-bold text-gray-900">📝 台本</h2>
+                  {/* 文字数インジケーター */}
+                  {(() => {
+                    const totalChars = result.script.full_script?.length ?? 0
+                    const totalSec = result.video_plan.total_duration_seconds
+                    const targetChars = Math.floor(totalSec * 6.5)
+                    const pct = Math.min(100, Math.round((totalChars / targetChars) * 100))
+                    const estMin = (totalChars / 6.5 / 60).toFixed(1)
+                    const ok = pct >= 80
+                    return (
+                      <div className={`text-xs px-3 py-1.5 rounded-full font-medium flex items-center gap-1.5 ${
+                        ok ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        <span>{ok ? '✅' : '⚠️'}</span>
+                        <span>{totalChars.toLocaleString()}文字</span>
+                        <span className="opacity-60">|</span>
+                        <span>読み上げ約{estMin}分</span>
+                        <span className="opacity-60">|</span>
+                        <span>目標対比 {pct}%</span>
+                      </div>
+                    )
+                  })()}
+                </div>
                 <p className="text-xs text-gray-400 mb-4">
                   各セクションをクリックすると詳細を確認できます
                 </p>

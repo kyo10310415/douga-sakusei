@@ -275,23 +275,30 @@ class OpenAIService(BaseAIService):
         character = data.get("character", {})
         plan = data.get("plan", {})
 
-        # 動画尺から各セクションの目安文字数を計算（日本語は約300字/分）
-        total_sec = plan.get("total_duration_seconds", 600)
-        chars_per_sec = 5  # 約300字/分 = 5字/秒
+        # ── 文字数計算 ──
+        # 日本語読み上げ速度: 約390字/分 = 6.5字/秒（VTuberの実測値）
+        # ただし GPT は指示より少なめに書く傾向があるため ×1.2 の余裕を持たせる
+        CHARS_PER_SEC = 6.5
+        SAFETY_MARGIN = 1.2  # 余裕係数
 
-        # structure から各セクションの秒数を取り出す
+        total_sec = plan.get("total_duration_seconds", 600)
+        total_chars_target = int(total_sec * CHARS_PER_SEC * SAFETY_MARGIN)
+
         structure = plan.get("structure", [])
-        section_guide = ""
+
+        # セクションごとの最低文字数を計算して指示文を生成
+        section_guide_lines = []
         for s in structure:
             sec = s.get("seconds", 60)
-            approx_chars = sec * chars_per_sec
-            section_guide += (
-                f"  - {s.get('title', '')}（{s.get('section', '')}）: "
-                f"{sec}秒 → narration は約{approx_chars}文字\n"
+            min_chars = int(sec * CHARS_PER_SEC * SAFETY_MARGIN)
+            section_guide_lines.append(
+                f"  ・{s.get('title', '')}（{s.get('section', '')}）: "
+                f"{sec}秒 → narration 最低 {min_chars} 文字以上（目安 {int(sec * CHARS_PER_SEC)} 文字）"
             )
+        section_guide = "\n".join(section_guide_lines)
 
         prompt = f"""あなたはプロのVTuber台本ライターです。
-以下のキャラクター設定・動画企画をもとに、視聴者を引きつける本格的な台本をJSON形式で作成してください。
+以下のキャラクター設定・動画企画をもとに、実際に読み上げる本格的な台本をJSON形式で作成してください。
 
 ━━━━━━━━━━━━━━━━━━━━━
 ■ キャラクター設定
@@ -304,39 +311,48 @@ class OpenAIService(BaseAIService):
 {json.dumps(plan, ensure_ascii=False, indent=2)}
 
 ━━━━━━━━━━━━━━━━━━━━━
-■ 絶対に守るルール
+■ 【最重要】文字数ルール（必ず守ること）
 ━━━━━━━━━━━━━━━━━━━━━
-1. 各セクションの narration は「実際に読み上げる台本テキスト」を丸ごと書く。要約・箇条書き・説明文は禁止。
-2. 各セクションの文字数は以下の目安を必ず守ること（少なすぎる narration は不合格）:
+台本全体の合計文字数: 最低 {total_chars_target} 文字以上（{total_sec}秒動画）
+
+各セクションの narration 最低文字数:
 {section_guide}
-3. キャラクターの口調・一人称（{character.get('first_person','私')}）・視聴者の呼び方（{character.get('viewer_address','みなさん')}）を全セクションで統一する。
-4. NG表現（{json.dumps(character.get('ng_expressions', []), ensure_ascii=False)}）は絶対に使用しない。
-5. 冒頭フック（hook）は視聴者が「続きを見たい！」と思う強いインパクトで始める。
-6. 本編セクション（main）は具体的な情報・例・数字を盛り込み、薄い内容にしない。
-7. full_script は全セクションの narration を改行でつないだ完全な台本テキストにする。
+
+【なぜこの文字数が必要か】
+日本語は約6.5文字/秒（390文字/分）で読み上げられる。
+{total_sec}秒の動画を埋めるには、最低 {int(total_sec * CHARS_PER_SEC)} 文字が必要。
+余裕を持って {total_chars_target} 文字以上を書くこと。
+
+━━━━━━━━━━━━━━━━━━━━━
+■ 台本の書き方ルール
+━━━━━━━━━━━━━━━━━━━━━
+1. narration は「視聴者に向けて実際に話す言葉」を一言一句書く。要約・箇条書き・「〜について説明します」などの説明文は禁止。
+2. 話し言葉で書く。「〜です。〜ます。」「〜だよ！」「〜だよね？」など自然な会話調にする。
+3. キャラクターの一人称は「{character.get('first_person','私')}」、視聴者の呼び方は「{character.get('viewer_address','みなさん')}」に統一する。
+4. NG表現 {json.dumps(character.get('ng_expressions', []), ensure_ascii=False)} は絶対に使用しない。
+5. 本編セクションは「具体的な数字・事例・ステップ」を盛り込み、薄い内容にしない。
+6. full_script は全セクションの narration をそのまま順番に連結したもの（加工・省略禁止）。
 
 ━━━━━━━━━━━━━━━━━━━━━
 ■ 出力するJSONの構造
 ━━━━━━━━━━━━━━━━━━━━━
 {{
-  "hook_text": "冒頭15秒の強烈なフックテキスト（narration と同じ内容）",
-  "full_script": "全セクションの narration を連結した完全台本テキスト",
-  "subtitle_text": "全セクションの subtitle を連結したテキスト",
+  "hook_text": "（冒頭フックの narration と同じテキスト）",
+  "full_script": "（全セクションの narration を改行2つで連結した完全台本。最低 {total_chars_target} 文字）",
+  "subtitle_text": "（全セクションの subtitle を改行で連結）",
   "asset_list": [{{"type": "background|insert_image|bgm", "description": "説明"}}],
   "sections": [
     {{
       "section_type": "hook|problem|main|example|summary|cta",
       "title": "セクション名",
-      "duration_seconds": 秒数（整数）,
-      "narration": "このセクションで実際に読み上げる台本テキスト全文（上記文字数目安を守ること）",
-      "subtitle": "画面に表示する字幕テキスト（30字以内）",
-      "direction": "カメラ・演出・挿入画像などの指示",
+      "duration_seconds": （秒数・整数）,
+      "narration": "（このセクションの読み上げ台本テキスト。上記の最低文字数を必ず満たすこと）",
+      "subtitle": "（画面表示の字幕・30字以内）",
+      "direction": "（カメラ・演出・挿入画像の指示）",
       "expression": "normal|smile|surprise|troubled|serious"
     }}
   ]
-}}
-
-必ずすべてのセクションを含め、narration は十分な長さで書くこと。"""
+}}"""
 
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -344,10 +360,12 @@ class OpenAIService(BaseAIService):
                 {
                     "role": "system",
                     "content": (
-                        "あなたはプロのVTuber台本ライターです。"
-                        "指定された文字数・キャラクター設定を厳守し、"
-                        "視聴者を飽きさせない本格的な台本を書きます。"
-                        "narration が短すぎる台本は品質不合格として、必ず十分な長さで書いてください。"
+                        f"あなたはプロのVTuber台本ライターです。"
+                        f"{total_sec}秒（{total_sec//60}分）の動画台本を書きます。"
+                        f"日本語の読み上げ速度は約6.5文字/秒なので、"
+                        f"台本全体で最低 {total_chars_target} 文字以上書いてください。"
+                        f"文字数が足りない台本は品質不合格です。"
+                        f"narration は要約や説明文ではなく、実際に読み上げる言葉を全文書いてください。"
                     ),
                 },
                 {"role": "user", "content": prompt},

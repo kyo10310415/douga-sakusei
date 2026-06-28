@@ -100,10 +100,13 @@ async def generate_script_sync(
     })
 
     # ── full_script フォールバック ──
-    # GPT が full_script を短く返した場合、sections の narration を連結して補完する
+    # full_script が動画尺の50%未満の文字数なら sections の narration を連結して補完
+    # 例: 5分(300秒) → 期待値1950字 → 975字未満なら補完
+    total_sec = plan_result.get("total_duration_seconds", 600)
+    min_acceptable_chars = int(total_sec * 6.5 * 0.5)  # 期待値の50%
     sections_raw = script_result.get("sections", [])
     generated_full = script_result.get("full_script", "")
-    if len(generated_full) < 200 and sections_raw:
+    if len(generated_full) < min_acceptable_chars and sections_raw:
         generated_full = "\n\n".join(
             f"【{s.get('title', s.get('section_type', ''))}】\n{s.get('narration', '')}"
             for s in sections_raw
