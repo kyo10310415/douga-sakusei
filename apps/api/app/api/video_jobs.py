@@ -38,6 +38,24 @@ class GenerateScriptRequest(BaseModel):
     plan_id: str  # Step1で返された plan_id
 
 
+def _to_str(value) -> str | None:
+    """dict/list/その他をTextカラムに安全に格納できる文字列に変換する。
+    GPT-4oが型をブレさせて返してくることへの防御。
+    - str → そのまま
+    - dict/list → json.dumps (UTF-8, ensure_ascii=False)
+    - None → None
+    - その他 → str()
+    """
+    import json as _json
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return _json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def _build_character_dict(character: CharacterProfile) -> dict:
     """CharacterProfile → AI入力用 dict"""
     return {
@@ -109,18 +127,39 @@ async def generate_plan_only(
         })
 
         # DB保存
+        # ── 型安全変換 ──────────────────────────────────────────────
+        # GPT-4o はフィールドの型をブレさせて返すことがある
+        # Text型カラムには必ず str or None を渡す（dict/list は json.dumps）
+        # JSON型カラム (structure/youtube_title_candidates/youtube_tags) は
+        # list/dict のまま渡す（既に正しい型ならそのまま、str なら json.loads）
+        # ────────────────────────────────────────────────────────────
+        import json as _json
+
+        def _as_json(v):
+            """JSON型カラム用: str なら loads、list/dict はそのまま"""
+            if v is None:
+                return None
+            if isinstance(v, (list, dict)):
+                return v
+            if isinstance(v, str):
+                try:
+                    return _json.loads(v)
+                except Exception:
+                    return v
+            return v
+
         video_plan = VideoPlan(
             character_id=character.id,
             theme_id=theme.id,
-            title=plan_result.get("title", "未タイトル"),
-            goal=plan_result.get("goal"),
-            target_audience=plan_result.get("target_audience"),
+            title=_to_str(plan_result.get("title")) or "未タイトル",
+            goal=_to_str(plan_result.get("goal")),
+            target_audience=_to_str(plan_result.get("target_audience")),
             total_duration_seconds=plan_result.get("total_duration_seconds", 600),
-            structure=plan_result.get("structure"),
-            youtube_title_candidates=plan_result.get("youtube_title_candidates"),
-            youtube_description=plan_result.get("youtube_description"),
-            youtube_tags=plan_result.get("youtube_tags"),
-            cta=plan_result.get("cta"),
+            structure=_as_json(plan_result.get("structure")),
+            youtube_title_candidates=_as_json(plan_result.get("youtube_title_candidates")),
+            youtube_description=_to_str(plan_result.get("youtube_description")),
+            youtube_tags=_as_json(plan_result.get("youtube_tags")),
+            cta=_to_str(plan_result.get("cta")),
             status="draft",
         )
         db.add(video_plan)
@@ -389,18 +428,32 @@ async def generate_script_sync(
         )
 
     # ── DB 保存 (VideoPlan + Script + ScriptSection) ──
+    import json as _json
+
+    def _as_json(v):
+        if v is None:
+            return None
+        if isinstance(v, (list, dict)):
+            return v
+        if isinstance(v, str):
+            try:
+                return _json.loads(v)
+            except Exception:
+                return v
+        return v
+
     video_plan = VideoPlan(
         character_id=character.id,
         theme_id=theme.id,
-        title=plan_result.get("title", "未タイトル"),
-        goal=plan_result.get("goal"),
-        target_audience=plan_result.get("target_audience"),
+        title=_to_str(plan_result.get("title")) or "未タイトル",
+        goal=_to_str(plan_result.get("goal")),
+        target_audience=_to_str(plan_result.get("target_audience")),
         total_duration_seconds=plan_result.get("total_duration_seconds", 600),
-        structure=plan_result.get("structure"),
-        youtube_title_candidates=plan_result.get("youtube_title_candidates"),
-        youtube_description=plan_result.get("youtube_description"),
-        youtube_tags=plan_result.get("youtube_tags"),
-        cta=plan_result.get("cta"),
+        structure=_as_json(plan_result.get("structure")),
+        youtube_title_candidates=_as_json(plan_result.get("youtube_title_candidates")),
+        youtube_description=_to_str(plan_result.get("youtube_description")),
+        youtube_tags=_as_json(plan_result.get("youtube_tags")),
+        cta=_to_str(plan_result.get("cta")),
         status="draft",
     )
     db.add(video_plan)
