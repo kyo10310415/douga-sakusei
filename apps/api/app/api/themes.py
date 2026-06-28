@@ -25,6 +25,7 @@ class ThemeCreate(BaseModel):
     structure_example_seconds: Optional[int] = 60
     structure_summary_seconds: Optional[int] = 30
     structure_cta_seconds: Optional[int] = 15
+    custom_structure: Optional[list] = None  # ← 追加
     thumbnail_policy: Optional[str] = None
     title_policy: Optional[str] = None
     description_template: Optional[str] = None
@@ -127,6 +128,7 @@ def _theme_to_dict(t: VideoThemeSetting) -> dict:
         "structure_example_seconds": t.structure_example_seconds,
         "structure_summary_seconds": t.structure_summary_seconds,
         "structure_cta_seconds": t.structure_cta_seconds,
+        "custom_structure": getattr(t, "custom_structure", None),  # ← DB未適用でも安全
         "thumbnail_policy": t.thumbnail_policy,
         "title_policy": t.title_policy,
         "description_template": t.description_template,

@@ -56,6 +56,46 @@ def version_check():
     }
 
 
+@app.get("/db-check", tags=["system"])
+def db_check():
+    """DB スキーマ診断 - 必要なカラムが存在するか確認"""
+    from app.core.database import engine
+    from sqlalchemy import text
+    results = {}
+    checks = [
+        ("video_theme_settings", "custom_structure"),
+        ("character_profiles", "voice_instructions"),
+        ("video_plans", "id"),
+        ("scripts", "id"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for table, col in checks:
+                try:
+                    row = conn.execute(
+                        text(f"SELECT column_name FROM information_schema.columns "
+                             f"WHERE table_name=:t AND column_name=:c"),
+                        {"t": table, "c": col}
+                    ).fetchone()
+                    results[f"{table}.{col}"] = "✅ exists" if row else "❌ MISSING"
+                except Exception as e:
+                    results[f"{table}.{col}"] = f"ERROR: {e}"
+            # alembic version
+            try:
+                ver = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
+                results["alembic_version"] = ver[0] if ver else "none"
+            except Exception as e:
+                results["alembic_version"] = f"ERROR: {e}"
+    except Exception as e:
+        return {"error": str(e)}
+    return results
+
+
+# ── 500エラー時にもCORSヘッダーを付ける保護ミドルウェア ──
+# FastAPIはデフォルトで500エラー時にCORSミドルウェアをバイパスする場合がある
+# → ExceptionMiddlewareより先にCORSミドルウェアが動くようstarlette標準に依存
+# （CORSMiddlewareは既に追加済みなので追加対応不要だが念のためコメントで明示）
+
 # 静的ファイルサービス
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs("static", exist_ok=True)
