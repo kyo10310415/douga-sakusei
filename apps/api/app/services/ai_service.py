@@ -275,104 +275,220 @@ class OpenAIService(BaseAIService):
         character = data.get("character", {})
         plan = data.get("plan", {})
 
-        # ── 文字数計算 ──
-        # 日本語読み上げ速度: 約390字/分 = 6.5字/秒（VTuberの実測値）
-        # ただし GPT は指示より少なめに書く傾向があるため ×1.2 の余裕を持たせる
+        # ─────────────────────────────────────────────────────────
+        # 文字数計算
+        # 日本語読み上げ速度: 約6.5字/秒（390字/分）
+        # SAFETY_MARGIN: GPTが指示より少なく書く傾向への対抗係数
+        # ─────────────────────────────────────────────────────────
         CHARS_PER_SEC = 6.5
-        SAFETY_MARGIN = 1.2  # 余裕係数
+        SAFETY_MARGIN = 1.3   # 1.2→1.3に強化（GPTは30%短く書く傾向）
 
         total_sec = plan.get("total_duration_seconds", 600)
         total_chars_target = int(total_sec * CHARS_PER_SEC * SAFETY_MARGIN)
 
+        # ─────────────────────────────────────────────────────────
+        # max_tokens 計算
+        # 日本語1文字 ≒ 0.65 tokens（保守的）
+        # JSON構造オーバーヘッド: 約1000tokens
+        # ─────────────────────────────────────────────────────────
+        CHARS_PER_TOKEN_JA = 0.65
+        JSON_OVERHEAD_TOKENS = 1200
+        max_tokens_needed = int(total_chars_target / CHARS_PER_TOKEN_JA) + JSON_OVERHEAD_TOKENS
+        # gpt-4oの上限128,000 / 安全のため16,000でキャップ
+        max_tokens = min(max(max_tokens_needed, 4096), 16000)
+
         structure = plan.get("structure", [])
 
-        # セクションごとの最低文字数を計算して指示文を生成
-        section_guide_lines = []
-        for s in structure:
+        # ─────────────────────────────────────────────────────────
+        # セクションごとの最低文字数ガイド（具体的な数字で指示）
+        # ─────────────────────────────────────────────────────────
+        section_lines = []
+        for i, s in enumerate(structure, 1):
             sec = s.get("seconds", 60)
             min_chars = int(sec * CHARS_PER_SEC * SAFETY_MARGIN)
-            section_guide_lines.append(
-                f"  ・{s.get('title', '')}（{s.get('section', '')}）: "
-                f"{sec}秒 → narration 最低 {min_chars} 文字以上（目安 {int(sec * CHARS_PER_SEC)} 文字）"
+            # 具体的な例文量を示す（○行程度と伝える）
+            approx_lines = max(3, round(min_chars / 50))
+            section_lines.append(
+                f"  {i}. 【{s.get('title', '')}】({s.get('section', '')})"
+                f" {sec}秒分 → narration を {min_chars}字以上書く"
+                f"（約{approx_lines}行〜）"
             )
-        section_guide = "\n".join(section_guide_lines)
+        section_guide = "\n".join(section_lines)
 
-        prompt = f"""あなたはプロのVTuber台本ライターです。
-以下のキャラクター設定・動画企画をもとに、実際に読み上げる本格的な台本をJSON形式で作成してください。
+        # ─────────────────────────────────────────────────────────
+        # システムプロンプト: 役割と絶対ルールを最初に宣言
+        # ─────────────────────────────────────────────────────────
+        system_prompt = (
+            f"あなたはプロのVTuber台本ライターです。\n"
+            f"今から {total_sec}秒（{total_sec//60}分{total_sec%60:02d}秒）の動画台本をJSON形式で作成します。\n\n"
+            f"【絶対ルール】\n"
+            f"・narration は「実際に声に出して読む言葉」を一字一句書く。要約・箇条書き・説明文は不合格。\n"
+            f"・日本語の読み上げ速度は 6.5字/秒。{total_sec}秒動画には最低 {int(total_sec*CHARS_PER_SEC)}字が必要。\n"
+            f"・全 sections の narration 合計が {total_chars_target}字以上でなければ不合格とみなす。\n"
+            f"・各セクションの narration は、そのセクションの duration_seconds × 6.5 × 1.3 字以上書くこと。\n"
+            f"・full_script は sections の narration を順に連結したもの（省略禁止）。\n"
+            f"・出力は必ず正しい JSON オブジェクト1つのみ（コードブロック不要）。"
+        )
 
-━━━━━━━━━━━━━━━━━━━━━
-■ キャラクター設定
-━━━━━━━━━━━━━━━━━━━━━
+        # ─────────────────────────────────────────────────────────
+        # ユーザープロンプト: 具体的な指示
+        # ─────────────────────────────────────────────────────────
+        prompt = f"""以下の情報をもとに、{total_sec}秒動画の台本を作成してください。
+
+■ キャラクター
 {json.dumps(character, ensure_ascii=False, indent=2)}
 
-━━━━━━━━━━━━━━━━━━━━━
 ■ 動画企画
-━━━━━━━━━━━━━━━━━━━━━
 {json.dumps(plan, ensure_ascii=False, indent=2)}
 
-━━━━━━━━━━━━━━━━━━━━━
-■ 【最重要】文字数ルール（必ず守ること）
-━━━━━━━━━━━━━━━━━━━━━
-台本全体の合計文字数: 最低 {total_chars_target} 文字以上（{total_sec}秒動画）
-
-各セクションの narration 最低文字数:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 各セクションの narration 最低文字数（厳守）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {section_guide}
 
-【なぜこの文字数が必要か】
-日本語は約6.5文字/秒（390文字/分）で読み上げられる。
-{total_sec}秒の動画を埋めるには、最低 {int(total_sec * CHARS_PER_SEC)} 文字が必要。
-余裕を持って {total_chars_target} 文字以上を書くこと。
+合計 {total_chars_target}字以上（現在の動画尺 {total_sec}秒 × 6.5字/秒 × 1.3余裕）
 
-━━━━━━━━━━━━━━━━━━━━━
-■ 台本の書き方ルール
-━━━━━━━━━━━━━━━━━━━━━
-1. narration は「視聴者に向けて実際に話す言葉」を一言一句書く。要約・箇条書き・「〜について説明します」などの説明文は禁止。
-2. 話し言葉で書く。「〜です。〜ます。」「〜だよ！」「〜だよね？」など自然な会話調にする。
-3. キャラクターの一人称は「{character.get('first_person','私')}」、視聴者の呼び方は「{character.get('viewer_address','みなさん')}」に統一する。
-4. NG表現 {json.dumps(character.get('ng_expressions', []), ensure_ascii=False)} は絶対に使用しない。
-5. 本編セクションは「具体的な数字・事例・ステップ」を盛り込み、薄い内容にしない。
-6. full_script は全セクションの narration をそのまま順番に連結したもの（加工・省略禁止）。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ narration の書き方（重要）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+・「〜について説明します」「〜していきます」などの薄い言葉は禁止
+・具体的な数字・固有名詞・ステップ・体験談を盛り込む
+・一人称=「{character.get('first_person','私')}」、視聴者の呼び方=「{character.get('viewer_address','みなさん')}」
+・文体は話し言葉（「〜だよ！」「〜だよね？」「〜なんだけど」など）
+・禁止表現: {json.dumps(character.get('ng_expressions', []), ensure_ascii=False)}
+・本編（main）セクションは特に充実させ、1トピックにつき最低200字以上かける
 
-━━━━━━━━━━━━━━━━━━━━━
-■ 出力するJSONの構造
-━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 出力JSONの構造
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {{
-  "hook_text": "（冒頭フックの narration と同じテキスト）",
-  "full_script": "（全セクションの narration を改行2つで連結した完全台本。最低 {total_chars_target} 文字）",
-  "subtitle_text": "（全セクションの subtitle を改行で連結）",
-  "asset_list": [{{"type": "background|insert_image|bgm", "description": "説明"}}],
+  "hook_text": "冒頭フックのnarrationと同一テキスト",
+  "full_script": "全narrationを2改行で連結（{total_chars_target}字以上）",
+  "subtitle_text": "各セクションのsubtitleを改行で連結",
+  "asset_list": [{{"type": "background|insert_image|bgm", "description": "内容"}}],
   "sections": [
     {{
       "section_type": "hook|problem|main|example|summary|cta",
       "title": "セクション名",
-      "duration_seconds": （秒数・整数）,
-      "narration": "（このセクションの読み上げ台本テキスト。上記の最低文字数を必ず満たすこと）",
-      "subtitle": "（画面表示の字幕・30字以内）",
-      "direction": "（カメラ・演出・挿入画像の指示）",
+      "duration_seconds": 秒数,
+      "narration": "読み上げる全文（上記の最低文字数を必ず満たすこと）",
+      "subtitle": "字幕テキスト30字以内",
+      "direction": "カメラ・演出指示",
       "expression": "normal|smile|surprise|troubled|serious"
     }}
   ]
-}}"""
+}}
+
+重要: narration が短いと動画が「無音・間」だらけになります。
+必ず各セクションを充実した内容で埋めてください。"""
 
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"あなたはプロのVTuber台本ライターです。"
-                        f"{total_sec}秒（{total_sec//60}分）の動画台本を書きます。"
-                        f"日本語の読み上げ速度は約6.5文字/秒なので、"
-                        f"台本全体で最低 {total_chars_target} 文字以上書いてください。"
-                        f"文字数が足りない台本は品質不合格です。"
-                        f"narration は要約や説明文ではなく、実際に読み上げる言葉を全文書いてください。"
-                    ),
-                },
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
+            max_tokens=max_tokens,
+            temperature=0.85,   # 少し高めにして出力量を増やす
         )
-        return json.loads(response.choices[0].message.content)
+
+        result = json.loads(response.choices[0].message.content)
+
+        # ─────────────────────────────────────────────────────────
+        # 文字数チェック & フォールバック
+        # 生成された narration 合計が期待値の60%未満なら再試行
+        # ─────────────────────────────────────────────────────────
+        sections_out = result.get("sections", [])
+        narration_total = sum(len(s.get("narration", "")) for s in sections_out)
+        min_acceptable = int(total_sec * CHARS_PER_SEC * 0.6)  # 期待値の60%
+
+        if narration_total < min_acceptable and sections_out:
+            # 短すぎるセクションを特定して再生成プロンプトを作る
+            short_sections = []
+            for s in sections_out:
+                dur = s.get("duration_seconds", 60)
+                expected = int(dur * CHARS_PER_SEC * SAFETY_MARGIN)
+                actual = len(s.get("narration", ""))
+                if actual < int(expected * 0.6):
+                    short_sections.append({
+                        "section_type": s.get("section_type"),
+                        "title": s.get("title"),
+                        "duration_seconds": dur,
+                        "expected_chars": expected,
+                        "actual_chars": actual,
+                    })
+
+            if short_sections:
+                retry_prompt = f"""以下のセクションの narration が短すぎます。書き直してください。
+
+キャラクター一人称: 「{character.get('first_person','私')}」
+視聴者の呼び方: 「{character.get('viewer_address','みなさん')}」
+動画テーマ: {plan.get('title', '')}
+
+【書き直すセクション】
+"""
+                for ss in short_sections:
+                    retry_prompt += (
+                        f"\n■ {ss['title']}（{ss['section_type']}）"
+                        f" {ss['duration_seconds']}秒分\n"
+                        f"  必要文字数: {ss['expected_chars']}字以上\n"
+                        f"  現在の文字数: {ss['actual_chars']}字（不足）\n"
+                        f"  → {ss['expected_chars']}字以上の narration を書いてください\n"
+                    )
+                retry_prompt += f"""
+【書き方ルール】
+・実際に読み上げる言葉を一字一句書く（「〜について説明します」禁止）
+・話し言葉で具体的な数字・事例・ステップを盛り込む
+・各セクションを独立した JSON オブジェクトの配列で返す
+
+出力形式（JSONオブジェクト）:
+{{
+  "sections": [
+    {{
+      "section_type": "...",
+      "title": "...",
+      "narration": "（{short_sections[0]['expected_chars']}字以上の完全なテキスト）"
+    }}
+  ]
+}}"""
+
+                retry_response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                f"あなたはVTuber台本ライターです。"
+                                f"指示した文字数を必ず守って narration を書いてください。"
+                            ),
+                        },
+                        {"role": "user", "content": retry_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_tokens=max_tokens,
+                    temperature=0.9,
+                )
+                retry_result = json.loads(retry_response.choices[0].message.content)
+                retry_sections = retry_result.get("sections", [])
+
+                # 短かったセクションを再生成したものに差し替え
+                retry_map = {s.get("section_type"): s for s in retry_sections}
+                for i, s in enumerate(sections_out):
+                    stype = s.get("section_type")
+                    if stype in retry_map and retry_map[stype].get("narration"):
+                        sections_out[i]["narration"] = retry_map[stype]["narration"]
+
+                result["sections"] = sections_out
+
+        # full_script を sections から再構築（常に最新のnarrationを反映）
+        result["full_script"] = "\n\n".join(
+            s.get("narration", "")
+            for s in sections_out
+            if s.get("narration")
+        )
+
+        return result
 
 
 def get_ai_service() -> BaseAIService:
