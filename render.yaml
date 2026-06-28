@@ -1,125 +1,86 @@
-# render.yaml - VTuber Studio 本番インフラ定義（有料プラン対応版）
+# render.yaml - VTuber Studio 本番インフラ定義
 # Render Blueprint (IaC) https://render.com/docs/blueprint-spec
 #
-# サービス構成（有料プラン）:
-#   - api     : FastAPI Web Service（DBマイグレーション + Uvicorn）
-#   - worker  : Celery Background Worker（音声/動画/アップロード処理）
-#   - beat    : Celery Beat Scheduler（週次バッチ）
-#   - web     : Next.js Web Service
+# サービス構成（有料プラン・統合コンテナ版）:
+#   - api     : FastAPI + Celery Worker + Celery Beat（supervisordで1コンテナ統合）
+#   - web     : Next.js フロントエンド
 #   - db      : PostgreSQL 16 Managed Database
 #   - redis   : Redis Managed Instance
 #
 # ストレージ:
-#   音声・動画ファイルは Cloudflare R2（S3互換）に保存する。
-#   Renderの /tmp は ephemeral なので永続化には使わない。
-#   必要な環境変数（Renderダッシュボードで手動設定）:
-#     STORAGE_PROVIDER=r2
-#     R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
-#     R2_BUCKET_NAME, R2_PUBLIC_URL
-
-# ── 共通環境変数ブロック（YAML アンカー）──────────────────────────
-x-common-env: &common-env
-  - key: APP_ENV
-    value: production
-  - key: DEBUG
-    value: "false"
-  - key: SECRET_KEY
-    generateValue: true
-  - key: ALLOWED_ORIGINS
-    sync: false           # 例: https://vtuber-studio-web.onrender.com
-  - key: DATABASE_URL
-    fromDatabase:
-      name: vtuber-studio-db
-      property: connectionString
-  - key: REDIS_URL
-    fromService:
-      name: vtuber-studio-redis
-      type: redis
-      property: connectionString
-  - key: YOUTUBE_CLIENT_ID
-    sync: false
-  - key: YOUTUBE_CLIENT_SECRET
-    sync: false
-  - key: YOUTUBE_REDIRECT_URI
-    sync: false
-  - key: OPENAI_API_KEY
-    sync: false
-  # TTS: openai を使用
-  - key: TTS_PROVIDER
-    value: openai
-  - key: TTS_API_KEY
-    sync: false           # OpenAI APIキーと同じ場合は不要（OPENAI_API_KEYを使用）
-  - key: IMAGE_GENERATION_PROVIDER
-    value: mock
-  - key: IMAGE_GENERATION_API_KEY
-    sync: false
-  - key: VIDEO_GENERATION_PROVIDER
-    value: ffmpeg
-  - key: VIDEO_GENERATION_API_KEY
-    sync: false
-  # ── Cloudflare R2 ストレージ ──
-  - key: STORAGE_PROVIDER
-    value: r2             # local / r2 / s3
-  - key: R2_ACCOUNT_ID
-    sync: false           # Cloudflare Account ID
-  - key: R2_ACCESS_KEY_ID
-    sync: false           # R2 API Token (Access Key ID)
-  - key: R2_SECRET_ACCESS_KEY
-    sync: false           # R2 API Token (Secret Access Key)
-  - key: R2_BUCKET_NAME
-    value: vtuber-uploads
-  - key: R2_PUBLIC_URL
-    sync: false           # 例: https://pub-xxxx.r2.dev または カスタムドメイン
-  - key: UPLOAD_DIR
-    value: /tmp/uploads   # 一時作業ディレクトリ（R2アップロード前の一時保管）
+#   音声・動画ファイルは Render Disk（永続SSD）に保存。
+#   APIとWorkerが同一コンテナなのでディスクを共有できる。
+#   マウントパス: /opt/render/project/src/uploads
+#   Dockerのデフォルト WORKDIR が /app なので /app/uploads でも可だが
+#   Render公式推奨は /opt/render/project/src 配下のサブディレクトリ。
 
 services:
   # ===========================================================
-  # 1. FastAPI バックエンド API（Web Service）
+  # 1. 統合バックエンド（API + Worker + Beat）
+  #    supervisord で3プロセスを1コンテナで管理
   # ===========================================================
   - type: web
     name: vtuber-studio-api
     runtime: docker
     dockerfilePath: ./apps/api/Dockerfile
     dockerContext: ./apps/api
-    plan: starter         # 有料プラン（常時起動・スリープなし）
+    plan: starter
     region: oregon
     healthCheckPath: /health
     autoDeploy: true
-    numInstances: 1
+    numInstances: 1   # Disk使用時は必ず1インスタンス
 
-    envVars: *common-env
+    # ── Render Disk（永続ストレージ）──
+    # API・Worker・Beatが同一コンテナなのでこのパスを共有できる
+    disk:
+      name: vtuber-uploads
+      mountPath: /opt/render/project/src/uploads
+      sizeGB: 10       # 月額 $2.50。動画10本程度ならこれで十分
+
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        sync: false        # 例: https://vtuber-studio-web.onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vtuber-studio-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: vtuber-studio-redis
+          type: redis
+          property: connectionString
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REDIRECT_URI
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TTS_PROVIDER
+        value: openai
+      - key: TTS_API_KEY
+        sync: false
+      - key: IMAGE_GENERATION_PROVIDER
+        value: mock
+      - key: VIDEO_GENERATION_PROVIDER
+        value: ffmpeg
+      # ── ストレージ設定（Render Disk 使用）──
+      - key: STORAGE_PROVIDER
+        value: local          # Disk使用のため local のまま
+      - key: UPLOAD_DIR
+        value: /opt/render/project/src/uploads   # Diskのマウントパスと一致させる
+      - key: STORAGE_BASE_URL
+        sync: false           # 例: https://vtuber-studio-api.onrender.com/static/uploads
 
   # ===========================================================
-  # 2. Celery Background Worker（動画/音声/アップロード処理）
-  # ===========================================================
-  - type: worker
-    name: vtuber-studio-worker
-    runtime: docker
-    dockerfilePath: ./apps/api/Dockerfile.worker
-    dockerContext: ./apps/api
-    plan: starter         # 有料プランのみ Background Worker が使用可能
-    region: oregon
-    autoDeploy: true
-
-    envVars: *common-env
-
-  # ===========================================================
-  # 3. Celery Beat Scheduler（週次バッチ）
-  # ===========================================================
-  - type: worker
-    name: vtuber-studio-beat
-    runtime: docker
-    dockerfilePath: ./apps/api/Dockerfile.beat
-    dockerContext: ./apps/api
-    plan: starter
-    region: oregon
-    autoDeploy: true
-
-    envVars: *common-env
-
-  # ===========================================================
-  # 4. Next.js フロントエンド
+  # 2. Next.js フロントエンド
   # ===========================================================
   - type: web
     name: vtuber-studio-web
@@ -132,26 +93,26 @@ services:
 
     envVars:
       - key: NEXT_PUBLIC_API_URL
-        sync: false       # 例: https://vtuber-studio-api.onrender.com
+        sync: false        # 例: https://vtuber-studio-api.onrender.com
       - key: NODE_ENV
         value: production
 
   # ===========================================================
-  # 5. Redis（Celery ブローカー + 結果バックエンド）
+  # 3. Redis（Celery ブローカー + 結果バックエンド）
   # ===========================================================
   - type: redis
     name: vtuber-studio-redis
-    plan: starter         # 有料プラン（永続化・高可用性）
+    plan: starter
     region: oregon
     maxmemoryPolicy: allkeys-lru
     ipAllowList: []
 
 # ===========================================================
-# 6. PostgreSQL データベース
+# 4. PostgreSQL データベース
 # ===========================================================
 databases:
   - name: vtuber-studio-db
     databaseName: vtuber_studio
-    plan: starter         # 有料プラン（90日制限なし）
+    plan: starter
     region: oregon
     postgresMajorVersion: 16

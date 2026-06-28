@@ -19,49 +19,37 @@ logger = logging.getLogger(__name__)
 def _ensure_local_video(generated_video: GeneratedVideo, render_job_id: str) -> str:
     """
     YouTubeアップロードにはローカルファイルパスが必要。
-    R2使用時は file_path が None になるので URL からダウンロードする。
+    Render Disk 使用時は file_path が Disk 上のパスなので直接使える。
+    file_path が無い場合は file_url からローカルパスを推定する。
     """
     # ローカルファイルが存在する場合はそのまま
     if generated_video.file_path and os.path.exists(generated_video.file_path):
         return generated_video.file_path
 
-    # R2 URL からダウンロード
+    # file_url からローカルパスを推定（Render Disk 上にあるはず）
     if generated_video.file_url:
-        import httpx
-        local_path = f"/tmp/uploads/yt_upload/{render_job_id}/output.mp4"
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        try:
-            logger.info(f"[upload] downloading video from R2: {generated_video.file_url}")
-            with httpx.Client(timeout=300) as client:
-                r = client.get(generated_video.file_url)
-                r.raise_for_status()
-                with open(local_path, "wb") as f:
-                    f.write(r.content)
-            logger.info(f"[upload] downloaded to {local_path}")
-            return local_path
-        except Exception as e:
-            raise Exception(f"R2からの動画ダウンロードに失敗しました: {e}")
+        relative = generated_video.file_url.replace(
+            settings.STORAGE_BASE_URL.rstrip("/"), ""
+        ).lstrip("/")
+        candidate = os.path.join(settings.UPLOAD_DIR, relative)
+        if os.path.exists(candidate):
+            logger.info(f"[upload] resolved local path from URL: {candidate}")
+            return candidate
 
-    raise Exception("動画ファイルが見つかりません（file_path も file_url も未設定）")
+    raise Exception("動画ファイルが見つかりません（file_path も file_url も解決できません）")
 
 
 def _ensure_local_thumbnail(generated_video: GeneratedVideo, render_job_id: str) -> Optional[str]:
-    """サムネイルも同様にローカル確保"""
+    """サムネイルのローカルパスを確保する"""
     if generated_video.thumbnail_path and os.path.exists(generated_video.thumbnail_path):
         return generated_video.thumbnail_path
     if generated_video.thumbnail_url:
-        import httpx
-        local_path = f"/tmp/uploads/yt_upload/{render_job_id}/thumbnail.jpg"
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        try:
-            with httpx.Client(timeout=60) as client:
-                r = client.get(generated_video.thumbnail_url)
-                r.raise_for_status()
-                with open(local_path, "wb") as f:
-                    f.write(r.content)
-            return local_path
-        except Exception:
-            return None
+        relative = generated_video.thumbnail_url.replace(
+            settings.STORAGE_BASE_URL.rstrip("/"), ""
+        ).lstrip("/")
+        candidate = os.path.join(settings.UPLOAD_DIR, relative)
+        if os.path.exists(candidate):
+            return candidate
     return None
 
 
@@ -183,11 +171,8 @@ def upload_to_youtube_unlisted(self, render_job_id: str, generated_video_id: str
                 except Exception as e:
                     logger.warning(f"[upload] thumbnail upload failed: {e}")
 
-            # 一時ファイルクリーンアップ
-            if settings.STORAGE_PROVIDER != "local":
-                _cleanup_tmp(video_path)
-                if thumbnail_path:
-                    _cleanup_tmp(thumbnail_path)
+            # Render Disk 使用時はファイルを削除しない（永続保持）
+            # （一時ファイルではなく Disk 上の本番ファイルのため）
 
         # レビューチェックリスト作成
         review_checklist = ReviewChecklist(

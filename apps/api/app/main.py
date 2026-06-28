@@ -97,9 +97,13 @@ def db_check():
 # （CORSMiddlewareは既に追加済みなので追加対応不要だが念のためコメントで明示）
 
 # 静的ファイルサービス
-os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# アップロードファイル配信（音声・動画・画像）
+# Render Disk のマウントパス（/opt/render/project/src/uploads）を /uploads で公開
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 # APIルーターを登録
 from app.api.auth import router as auth_router

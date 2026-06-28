@@ -45,22 +45,16 @@ class Settings(BaseSettings):
     VIDEO_GENERATION_PROVIDER: str = "mock"
     VIDEO_GENERATION_API_KEY: str = ""
 
-    # Storage
-    STORAGE_PROVIDER: str = "local"       # local / r2 / s3
-    STORAGE_BUCKET: str = "vtuber-uploads"
-    STORAGE_ACCESS_KEY: str = ""          # AWS S3 用
-    STORAGE_SECRET_KEY: str = ""          # AWS S3 用
-    STORAGE_BASE_URL: str = "http://localhost:8000/static"
-
-    # Cloudflare R2（S3互換）
-    R2_ACCOUNT_ID: str = ""               # Cloudflare Account ID
-    R2_ACCESS_KEY_ID: str = ""            # R2 API Token (Access Key ID)
-    R2_SECRET_ACCESS_KEY: str = ""        # R2 API Token (Secret Access Key)
-    R2_BUCKET_NAME: str = "vtuber-uploads"
-    R2_PUBLIC_URL: str = ""               # 例: https://pub-xxxx.r2.dev
-
-    # File paths
-    UPLOAD_DIR: str = "static/uploads"
+    # Storage（Render Disk 使用 → STORAGE_PROVIDER=local 固定）
+    # UPLOAD_DIR = Render Disk のマウントパスと一致させること
+    # 本番: /opt/render/project/src/uploads（render.yaml の disk.mountPath と同じ）
+    # 開発: /tmp/uploads（docker-compose.yml で volume mount 推奨）
+    STORAGE_PROVIDER: str = "local"
+    UPLOAD_DIR: str = "/opt/render/project/src/uploads"
+    # STORAGE_BASE_URL: 音声・動画ファイルの公開ベースURL
+    # 本番: https://<your-api>.onrender.com/uploads
+    # ※ main.py で app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR)) が必要
+    STORAGE_BASE_URL: str = "http://localhost:8000/uploads"
 
     class Config:
         env_file = ".env"

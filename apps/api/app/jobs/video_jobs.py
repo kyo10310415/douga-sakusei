@@ -170,17 +170,22 @@ def render_video(self, render_job_id: str, script_id: str):
                 GeneratedVoice.status == "completed",
             ).first()
 
-            # R2使用時は file_url を一時ダウンロード
+            # Render Disk 上のローカルパスを直接参照（R2ダウンロード不要）
             audio_path = ""
             if voice:
                 if voice.file_path and os.path.exists(voice.file_path):
                     audio_path = voice.file_path
                 elif voice.file_url:
-                    # R2 URL から一時ダウンロード
-                    audio_path = _download_to_tmp(
-                        voice.file_url,
-                        f"/tmp/uploads/voices_dl/{render_job_id}/section_{section.order_index:03d}.mp3"
-                    )
+                    # file_url から UPLOAD_DIR ベースのローカルパスを推定
+                    # 例: http://host/uploads/voices/xxx/section_000.mp3
+                    #  → /opt/render/project/src/uploads/voices/xxx/section_000.mp3
+                    from app.core.config import settings as _s
+                    relative = voice.file_url.replace(
+                        _s.STORAGE_BASE_URL.rstrip("/"), ""
+                    ).lstrip("/")
+                    candidate = os.path.join(_s.UPLOAD_DIR, relative)
+                    if os.path.exists(candidate):
+                        audio_path = candidate
 
             bg_asset = db.query(GeneratedAsset).filter(
                 GeneratedAsset.section_id == section.id,
@@ -210,10 +215,11 @@ def render_video(self, render_job_id: str, script_id: str):
             raise Exception(result.get("error", "レンダリング失敗"))
 
         render_job.progress_percent = 70
-        render_job.current_step = "R2へ動画アップロード中"
+        render_job.current_step = "動画ファイルを保存中"
         db.commit()
 
-        # R2 にアップロード
+        # Render Disk に保存済み（output_path が既に UPLOAD_DIR 配下）
+        # storage_service.upload_file はローカルコピーなので呼ぶだけでURLが返る
         remote_key = f"videos/{render_job_id}/output.mp4"
         video_url = _run_async(storage_service.upload_file(
             local_path=output_path,
@@ -282,21 +288,6 @@ def render_video(self, render_job_id: str, script_id: str):
 # ────────────────────────────────────────────────────────────────────
 # ヘルパー
 # ────────────────────────────────────────────────────────────────────
-
-def _download_to_tmp(url: str, local_path: str) -> str:
-    """URL からファイルを一時ダウンロードしてパスを返す"""
-    import httpx
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    try:
-        with httpx.Client(timeout=60) as client:
-            r = client.get(url)
-            r.raise_for_status()
-            with open(local_path, "wb") as f:
-                f.write(r.content)
-        return local_path
-    except Exception as e:
-        logger.warning(f"[render] download failed {url}: {e}")
-        return ""
 
 
 def _create_placeholder_image(path: str, width: int, height: int, color: str):
