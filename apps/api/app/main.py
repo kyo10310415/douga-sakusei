@@ -129,5 +129,44 @@ app.include_router(promo_router, prefix=API_PREFIX)
 
 @app.on_event("startup")
 async def startup_event():
-    """起動時の初期化処理"""
-    pass
+    """起動時の初期化処理
+    
+    Alembic migration が何らかの理由で失敗した場合のフォールバック:
+    必須カラムが存在しない場合は直接 ALTER TABLE で追加する。
+    冪等なので何度実行しても安全。
+    """
+    from app.core.database import engine
+    from sqlalchemy import text
+    import logging
+    logger = logging.getLogger("startup")
+
+    # 追加が必要なカラムの定義: (テーブル名, カラム名, DDL型)
+    required_columns = [
+        ("video_theme_settings", "custom_structure",  "JSONB"),
+        ("character_profiles",   "voice_instructions", "TEXT"),
+    ]
+
+    try:
+        with engine.begin() as conn:
+            for table, column, col_type in required_columns:
+                row = conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name = :t AND column_name = :c"
+                    ),
+                    {"t": table, "c": column},
+                ).fetchone()
+
+                if row:
+                    logger.info(f"[startup] {table}.{column} ✅ already exists")
+                else:
+                    # カラムが存在しない → 直接 ALTER TABLE で追加
+                    conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
+                    )
+                    logger.warning(
+                        f"[startup] {table}.{column} ❌ was MISSING → added via ALTER TABLE"
+                    )
+    except Exception as e:
+        # DB接続失敗などの場合もサーバー起動は止めない
+        logger.error(f"[startup] column check failed (non-fatal): {e}")

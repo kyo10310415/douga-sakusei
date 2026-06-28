@@ -4,6 +4,8 @@ from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
 import asyncio
+import logging
+import traceback
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -14,6 +16,8 @@ from app.models.log import JobLog
 from app.models.character import CharacterProfile
 from app.models.theme import VideoThemeSetting
 from app.services.ai_service import get_ai_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/video-jobs", tags=["VideoJobs"])
 
@@ -76,70 +80,83 @@ async def generate_plan_only(
     所要時間: Mock ~0.1秒 / GPT-4o ~10-15秒
     次に POST /generate/script を呼び出して台本を生成する。
     """
-    # ── キャラクター取得 ──
-    character = db.query(CharacterProfile).filter(
-        CharacterProfile.id == data.character_id,
-        CharacterProfile.user_id == current_user.id,
-        CharacterProfile.is_active == True,
-    ).first()
-    if not character:
-        raise HTTPException(status_code=404, detail="キャラクターが見つかりません")
+    try:
+        # ── キャラクター取得 ──
+        character = db.query(CharacterProfile).filter(
+            CharacterProfile.id == data.character_id,
+            CharacterProfile.user_id == current_user.id,
+            CharacterProfile.is_active == True,
+        ).first()
+        if not character:
+            raise HTTPException(status_code=404, detail="キャラクターが見つかりません")
 
-    # ── テーマ取得 ──
-    theme = db.query(VideoThemeSetting).filter(
-        VideoThemeSetting.id == data.theme_id,
-        VideoThemeSetting.user_id == current_user.id,
-        VideoThemeSetting.is_active == True,
-    ).first()
-    if not theme:
-        raise HTTPException(status_code=404, detail="テーマが見つかりません")
+        # ── テーマ取得 ──
+        theme = db.query(VideoThemeSetting).filter(
+            VideoThemeSetting.id == data.theme_id,
+            VideoThemeSetting.user_id == current_user.id,
+            VideoThemeSetting.is_active == True,
+        ).first()
+        if not theme:
+            raise HTTPException(status_code=404, detail="テーマが見つかりません")
 
-    ai_service = get_ai_service()
-    is_mock = type(ai_service).__name__ == "MockAIService"
+        ai_service = get_ai_service()
+        is_mock = type(ai_service).__name__ == "MockAIService"
 
-    plan_result = await ai_service.generate_video_plan({
-        "character": _build_character_dict(character),
-        "theme": _build_theme_dict(theme, data.custom_topic),
-        "analysis": {},
-    })
+        plan_result = await ai_service.generate_video_plan({
+            "character": _build_character_dict(character),
+            "theme": _build_theme_dict(theme, data.custom_topic),
+            "analysis": {},
+        })
 
-    # DB保存
-    video_plan = VideoPlan(
-        character_id=character.id,
-        theme_id=theme.id,
-        title=plan_result.get("title", "未タイトル"),
-        goal=plan_result.get("goal"),
-        target_audience=plan_result.get("target_audience"),
-        total_duration_seconds=plan_result.get("total_duration_seconds", 600),
-        structure=plan_result.get("structure"),
-        youtube_title_candidates=plan_result.get("youtube_title_candidates"),
-        youtube_description=plan_result.get("youtube_description"),
-        youtube_tags=plan_result.get("youtube_tags"),
-        cta=plan_result.get("cta"),
-        status="draft",
-    )
-    db.add(video_plan)
-    db.commit()
-    db.refresh(video_plan)
+        # DB保存
+        video_plan = VideoPlan(
+            character_id=character.id,
+            theme_id=theme.id,
+            title=plan_result.get("title", "未タイトル"),
+            goal=plan_result.get("goal"),
+            target_audience=plan_result.get("target_audience"),
+            total_duration_seconds=plan_result.get("total_duration_seconds", 600),
+            structure=plan_result.get("structure"),
+            youtube_title_candidates=plan_result.get("youtube_title_candidates"),
+            youtube_description=plan_result.get("youtube_description"),
+            youtube_tags=plan_result.get("youtube_tags"),
+            cta=plan_result.get("cta"),
+            status="draft",
+        )
+        db.add(video_plan)
+        db.commit()
+        db.refresh(video_plan)
 
-    return {
-        "ai_mode": "mock" if is_mock else "openai",
-        "plan_id": str(video_plan.id),
-        "video_plan": {
-            "id": str(video_plan.id),
-            "title": video_plan.title,
-            "goal": video_plan.goal,
-            "target_audience": video_plan.target_audience,
-            "total_duration_seconds": video_plan.total_duration_seconds,
-            "structure": video_plan.structure,
-            "youtube_title_candidates": video_plan.youtube_title_candidates,
-            "youtube_description": video_plan.youtube_description,
-            "youtube_tags": video_plan.youtube_tags,
-            "cta": video_plan.cta,
-        },
-        "character": {"id": str(character.id), "name": character.name},
-        "theme": {"id": str(theme.id), "name": theme.name},
-    }
+        return {
+            "ai_mode": "mock" if is_mock else "openai",
+            "plan_id": str(video_plan.id),
+            "video_plan": {
+                "id": str(video_plan.id),
+                "title": video_plan.title,
+                "goal": video_plan.goal,
+                "target_audience": video_plan.target_audience,
+                "total_duration_seconds": video_plan.total_duration_seconds,
+                "structure": video_plan.structure,
+                "youtube_title_candidates": video_plan.youtube_title_candidates,
+                "youtube_description": video_plan.youtube_description,
+                "youtube_tags": video_plan.youtube_tags,
+                "cta": video_plan.cta,
+            },
+            "character": {"id": str(character.id), "name": character.name},
+            "theme": {"id": str(theme.id), "name": theme.name},
+        }
+
+    except HTTPException:
+        raise  # 404などはそのまま再raise
+
+    except Exception as e:
+        # 500エラー時にログとレスポンスに詳細を記録
+        tb = traceback.format_exc()
+        logger.error(f"[generate/plan] 500 error: {e}\n{tb}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"企画生成中にエラーが発生しました: {type(e).__name__}: {str(e)}"
+        )
 
 
 # ── Step 2: 台本のみ生成 (~20-30秒) ──
