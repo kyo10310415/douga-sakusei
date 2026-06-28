@@ -39,6 +39,8 @@ export default function ThemesPage() {
   const [genreInput, setGenreInput] = useState('')
   const [excludedGenreInput, setExcludedGenreInput] = useState('')
 
+  const [submitting, setSubmitting] = useState(false)
+
   useEffect(() => { fetchThemes() }, [])
 
   const fetchThemes = async () => {
@@ -54,6 +56,8 @@ export default function ThemesPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submitting) return  // 二重送信防止
+    setSubmitting(true)
     try {
       if (editingId) {
         await themeApi.update(editingId, form)
@@ -67,6 +71,18 @@ export default function ThemesPage() {
       fetchThemes()
     } catch (err: any) {
       alert(err.response?.data?.detail || 'エラーが発生しました')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleDelete = async (themeId: string, themeName: string) => {
+    if (!confirm(`「${themeName}」を削除しますか？`)) return
+    try {
+      await themeApi.delete(themeId)
+      fetchThemes()
+    } catch (err: any) {
+      alert(err.response?.data?.detail || '削除に失敗しました')
     }
   }
 
@@ -132,35 +148,43 @@ export default function ThemesPage() {
                   </div>
                 )}
               </div>
-              <button
-                onClick={() => {
-                  setForm({
-                    name: theme.name || '',
-                    main_channel_theme: theme.main_channel_theme || '',
-                    target_genres: theme.target_genres || [],
-                    excluded_genres: theme.excluded_genres || [],
-                    target_audience: theme.target_audience || '',
-                    purposes: theme.purposes || [],
-                    default_duration_seconds: theme.default_duration_seconds || 600,
-                    structure_hook_seconds: theme.structure_hook_seconds || 15,
-                    structure_problem_seconds: theme.structure_problem_seconds || 60,
-                    structure_main_seconds: theme.structure_main_seconds || 420,
-                    structure_example_seconds: theme.structure_example_seconds || 60,
-                    structure_summary_seconds: theme.structure_summary_seconds || 30,
-                    structure_cta_seconds: theme.structure_cta_seconds || 15,
-                    thumbnail_policy: theme.thumbnail_policy || '',
-                    title_policy: theme.title_policy || '',
-                    description_template: theme.description_template || '',
-                    pinned_comment_template: theme.pinned_comment_template || '',
-                    is_default: theme.is_default || false,
-                  })
-                  setEditingId(theme.id)
-                  setShowForm(true)
-                }}
-                className="mt-4 w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-sm"
-              >
-                編集
-              </button>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => {
+                    setForm({
+                      name: theme.name || '',
+                      main_channel_theme: theme.main_channel_theme || '',
+                      target_genres: theme.target_genres || [],
+                      excluded_genres: theme.excluded_genres || [],
+                      target_audience: theme.target_audience || '',
+                      purposes: theme.purposes || [],
+                      default_duration_seconds: theme.default_duration_seconds || 600,
+                      structure_hook_seconds: theme.structure_hook_seconds || 15,
+                      structure_problem_seconds: theme.structure_problem_seconds || 60,
+                      structure_main_seconds: theme.structure_main_seconds || 420,
+                      structure_example_seconds: theme.structure_example_seconds || 60,
+                      structure_summary_seconds: theme.structure_summary_seconds || 30,
+                      structure_cta_seconds: theme.structure_cta_seconds || 15,
+                      thumbnail_policy: theme.thumbnail_policy || '',
+                      title_policy: theme.title_policy || '',
+                      description_template: theme.description_template || '',
+                      pinned_comment_template: theme.pinned_comment_template || '',
+                      is_default: theme.is_default || false,
+                    })
+                    setEditingId(theme.id)
+                    setShowForm(true)
+                  }}
+                  className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-sm"
+                >
+                  編集
+                </button>
+                <button
+                  onClick={() => handleDelete(theme.id, theme.name)}
+                  className="px-4 bg-red-50 hover:bg-red-100 text-red-600 py-2 rounded-lg text-sm"
+                >
+                  削除
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -324,9 +348,10 @@ export default function ThemesPage() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2.5 rounded-lg text-sm font-medium"
+                  disabled={submitting}
+                  className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white py-2.5 rounded-lg text-sm font-medium"
                 >
-                  {editingId ? '更新する' : '作成する'}
+                  {submitting ? '処理中...' : editingId ? '更新する' : '作成する'}
                 </button>
               </div>
             </form>

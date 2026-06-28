@@ -38,7 +38,8 @@ def list_themes(
     current_user: User = Depends(get_current_user),
 ):
     themes = db.query(VideoThemeSetting).filter(
-        VideoThemeSetting.is_active == True
+        VideoThemeSetting.user_id == current_user.id,  # ← 自分のテーマのみ
+        VideoThemeSetting.is_active == True,
     ).order_by(VideoThemeSetting.created_at.desc()).all()
     return [_theme_to_dict(t) for t in themes]
 
@@ -60,6 +61,25 @@ def create_theme(
     db.commit()
     db.refresh(theme)
     return _theme_to_dict(theme)
+
+
+@router.delete("/{theme_id}")
+def delete_theme(
+    theme_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    theme = db.query(VideoThemeSetting).filter(
+        VideoThemeSetting.id == theme_id,
+        VideoThemeSetting.user_id == current_user.id,  # 自分のテーマのみ削除可
+        VideoThemeSetting.is_active == True,
+    ).first()
+    if not theme:
+        raise HTTPException(status_code=404, detail="テーマが見つかりません")
+
+    theme.is_active = False  # 論理削除
+    db.commit()
+    return {"message": "削除しました"}
 
 
 @router.put("/{theme_id}")

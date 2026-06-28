@@ -85,6 +85,7 @@ export const themeApi = {
   list: () => apiClient.get('/themes'),
   create: (data: any) => apiClient.post('/themes', data),
   update: (id: string, data: any) => apiClient.put(`/themes/${id}`, data),
+  delete: (id: string) => apiClient.delete(`/themes/${id}`),
 }
 
 // Analysis API
