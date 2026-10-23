@@ -31,7 +31,7 @@ vtuber-studio/
 ### 1. 前提条件
 
 - Docker & Docker Compose
-- Node.js 20+ (ローカル開発時)
+- Node.js 22.23.4（22系の修正版、ローカル開発時）
 - Python 3.11+ (ローカル開発時)
 - FFmpeg (ローカル開発時)
 
@@ -436,3 +436,9 @@ npm run dev
 3. **VOICEVOX**: `TTS_PROVIDER=voicevox` + VOICEVOXサーバーを起動
 4. **YouTube**: OAuth認証を完了し、Analytics APIを有効化
 5. **画像生成**: `IMAGE_GENERATION_PROVIDER` を設定（AssetGenerationServiceを拡張）
+
+### WebのNode.js更新（SEC-038）
+Next.jsフロントエンドのDocker共通baseを`node:22.23.4-alpine`へ固定し、deps/builder/runnerの全stageで同じ修正版を使います。apps/web/.node-versionとpackage/lockのenginesも22.23.4以上23未満へ整合しています。アプリ依存・Python API・Worker・Beat・DB定義は変更していません。
+本リポジトリは複数のRenderサービスを持ちます。将来配備する場合はvtuber-studio-webのDockerビルドを対象とし、API/Workerを意図せず再配備・実行しないよう対象を確認してください。旧Node base層はDockerの新タグで置換されます。Render上のwebコンテナでもnode --versionを確認し、通常の閲覧/認証/アップロードは別途再確認してください。
+隔離検証はNode22.23.4の型チェックとNext production buildを対象とし、本番動画生成/有料AI/API/DB処理は実行しません。Linux-musl向けNext SWC/sharpはDocker環境での検証が別途必要です。
+検証結果: Node22.23.4で`tsc --noEmit`と`next build`（19静的ページ）が成功しました。Docker CLIがないためLinux/Alpineコンテナ自体のbuild・実行は未実施です。Node公式Docker Hubの`22.23.4-alpine`タグがactiveでLinux amd64イメージを含むことは確認しています。アプリ依存は更新していません。
